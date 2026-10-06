@@ -1,3 +1,4 @@
+#include "../managers/SeatDesktop.hpp"
 #include "Monitor.hpp"
 #include "../desktop/view/window/WindowEffectsController.hpp"
 #include "../desktop/view/window/WindowPresentation.hpp"
@@ -1364,7 +1365,7 @@ void CMonitor::changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal, bo
     if (pWorkspace == m_activeWorkspace)
         return;
 
-    if (!internal) {
+    if (!internal && !(g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->forMonitor(m_self.lock()))) {
         g_pInputManager->unconstrainMouse();
         g_pInputManager->m_emptyFocusCursorSet = false;
         g_pInputManager->releaseAllMouseButtons();

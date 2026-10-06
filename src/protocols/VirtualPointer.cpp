@@ -1,8 +1,11 @@
+#include "core/Seat.hpp"
+#include "../managers/SeatManager.hpp"
 #include "VirtualPointer.hpp"
 #include "core/Output.hpp"
 #include "../debug/log/Logger.hpp"
 
-CVirtualPointerV1Resource::CVirtualPointerV1Resource(SP<CZwlrVirtualPointerV1> resource_, PHLMONITORREF boundOutput_) : m_boundOutput(boundOutput_), m_resource(resource_) {
+CVirtualPointerV1Resource::CVirtualPointerV1Resource(SP<CZwlrVirtualPointerV1> resource_, PHLMONITORREF boundOutput_, SP<CWLSeatResource> seat) :
+    m_boundOutput(boundOutput_), m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -157,7 +160,13 @@ void CVirtualPointerProtocol::destroyResource(CVirtualPointerV1Resource* pointer
 
 void CVirtualPointerProtocol::onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr, wl_resource* seat, uint32_t id, PHLMONITORREF output) {
 
-    const auto RESOURCE = m_pointers.emplace_back(makeShared<CVirtualPointerV1Resource>(makeShared<CZwlrVirtualPointerV1>(pMgr->client(), pMgr->version(), id), output));
+    const auto requestedSeat = seat ? CWLSeatResource::fromResource(seat) : nullptr;
+    if (seat && !requestedSeat) {
+        wl_client_post_implementation_error(pMgr->client(), "invalid virtual pointer seat");
+        return;
+    }
+    const auto RESOURCE =
+        m_pointers.emplace_back(makeShared<CVirtualPointerV1Resource>(makeShared<CZwlrVirtualPointerV1>(pMgr->client(), pMgr->version(), id), output, requestedSeat));
 
     if UNLIKELY (!RESOURCE->good()) {
         pMgr->noMemory();
@@ -168,4 +177,8 @@ void CVirtualPointerProtocol::onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr
     LOG(Log::DEBUG, "New VPointer at id {}", id);
 
     m_events.newPointer.emit(RESOURCE);
+}
+
+CSeatManager* CVirtualPointerV1Resource::manager() const {
+    return m_seat ? m_seat->manager() : g_pSeatManager.get();
 }

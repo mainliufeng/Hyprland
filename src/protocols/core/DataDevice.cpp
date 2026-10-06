@@ -1,6 +1,7 @@
 #include "DataDevice.hpp"
 #include <algorithm>
 #include "../../managers/SeatManager.hpp"
+#include "../../managers/SeatDesktop.hpp"
 #include "../../pointer/PointerManager.hpp"
 #include "../../managers/eventLoop/EventLoopManager.hpp"
 #include "../../Compositor.hpp"
@@ -65,15 +66,15 @@ CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataS
         m_recvd = true;
 
         // if (source->hasDnd())
-        //     PROTO::data->completeDrag();
+        //     PROTO::data->completeDrag(m_seat);
     });
 
     m_resource->setFinish([this](CWlDataOffer* r) {
         m_dead = true;
         if (!m_source || !m_recvd || !m_accepted)
-            PROTO::data->abortDrag();
+            PROTO::data->abortDrag(m_seat);
         else
-            PROTO::data->completeDrag();
+            PROTO::data->completeDrag(m_seat);
     });
 }
 
@@ -236,7 +237,7 @@ eDataSourceType CWLDataSourceResource::type() {
     return DATA_SOURCE_TYPE_WAYLAND;
 }
 
-CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : m_resource(resource_) {
+CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -244,25 +245,28 @@ CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : m_re
     m_resource->setOnDestroy([this](CWlDataDevice* r) { PROTO::data->destroyResource(this); });
 
     m_client = m_resource->client();
+    if (manager() != g_pSeatManager.get())
+        m_focusListener = manager()->m_events.keyboardFocusChange.listen([this] { PROTO::data->onKeyboardFocus(manager()); });
 
-    m_resource->setSetSelection([](CWlDataDevice* r, wl_resource* sourceR, uint32_t serial) {
+    m_resource->setSetSelection([this](CWlDataDevice* r, wl_resource* sourceR, uint32_t serial) {
         auto source = sourceR ? CWLDataSourceResource::fromResource(sourceR) : CSharedPointer<CWLDataSourceResource>{};
         if (!source) {
             LOG(Log::DEBUG, "Reset selection received");
-            g_pSeatManager->setCurrentSelection(nullptr);
+            manager()->setCurrentSelection(nullptr);
             return;
         }
 
         if (source && source->m_used)
             LOG(Log::WARN, "setSelection on a used resource. By protocol, this is a violation, but firefox et al insist on doing this.");
 
+        source->m_device = m_self;
         source->markUsed();
 
-        g_pSeatManager->setCurrentSelection(source);
+        manager()->setCurrentSelection(source);
     });
 
-    m_resource->setStartDrag([](CWlDataDevice* r, wl_resource* sourceR, wl_resource* origin, wl_resource* icon, uint32_t serial) {
-        auto source = CWLDataSourceResource::fromResource(sourceR);
+    m_resource->setStartDrag([this](CWlDataDevice* r, wl_resource* sourceR, wl_resource* origin, wl_resource* icon, uint32_t serial) {
+        auto source = sourceR ? CWLDataSourceResource::fromResource(sourceR) : nullptr;
         if (!source) {
             LOG(Log::ERR, "No source in drag");
             return;
@@ -273,9 +277,13 @@ CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : m_re
 
         source->markUsed();
 
-        source->m_dnd = true;
+        const auto originSurface = CWLSurfaceResource::fromResource(origin);
+        if (!manager()->serialValid(m_seat, serial, false) || manager()->m_state.pointerFocus != originSurface)
+            return;
+        source->m_device = m_self;
+        source->m_dnd    = true;
 
-        PROTO::data->initiateDrag(source, icon ? CWLSurfaceResource::fromResource(icon) : nullptr, CWLSurfaceResource::fromResource(origin));
+        PROTO::data->initiateDrag(source, icon ? CWLSurfaceResource::fromResource(icon) : nullptr, originSurface, manager());
     });
 }
 
@@ -367,7 +375,8 @@ CWLDataDeviceManagerResource::CWLDataDeviceManagerResource(SP<CWlDataDeviceManag
     });
 
     m_resource->setGetDataDevice([this](CWlDataDeviceManager* r, uint32_t id, wl_resource* seat) {
-        const auto RESOURCE = PROTO::data->m_devices.emplace_back(makeShared<CWLDataDeviceResource>(makeShared<CWlDataDevice>(r->client(), r->version(), id)));
+        const auto RESOURCE =
+            PROTO::data->m_devices.emplace_back(makeShared<CWLDataDeviceResource>(makeShared<CWlDataDevice>(r->client(), r->version(), id), CWLSeatResource::fromResource(seat)));
 
         if UNLIKELY (!RESOURCE->good()) {
             r->noMemory();
@@ -376,6 +385,7 @@ CWLDataDeviceManagerResource::CWLDataDeviceManagerResource(SP<CWlDataDeviceManag
         }
 
         RESOURCE->m_self = RESOURCE;
+        m_device         = RESOURCE;
 
         for (auto const& s : m_sources) {
             if (!s)
@@ -426,13 +436,14 @@ void CWLDataDeviceProtocol::destroyResource(CWLDataOfferResource* resource) {
     std::erase_if(m_offers, [&](const auto& other) { return other.get() == resource; });
 }
 
-SP<IDataDevice> CWLDataDeviceProtocol::dataDeviceForClient(wl_client* c) {
+SP<IDataDevice> CWLDataDeviceProtocol::dataDeviceForClient(wl_client* c, CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
 #ifndef NO_XWAYLAND
-    if (g_pXWayland && g_pXWayland->m_server && c == g_pXWayland->m_server->m_xwaylandClient)
+    if (seat == g_pSeatManager.get() && g_pXWayland && g_pXWayland->m_server && c == g_pXWayland->m_server->m_xwaylandClient)
         return g_pXWayland->m_wm->getDataDevice();
 #endif
 
-    auto it = std::ranges::find_if(m_devices, [c](const auto& e) { return e->client() == c; });
+    auto it = std::ranges::find_if(m_devices, [c, seat](const auto& e) { return e->client() == c && e->manager() == seat; });
     if (it == m_devices.end())
         return nullptr;
     return *it;
@@ -453,6 +464,7 @@ void CWLDataDeviceProtocol::sendSelectionToDevice(SP<IDataDevice> dev, SP<IDataS
             m_offers.pop_back();
             return;
         }
+        OFFER->m_seat   = WL->manager();
         OFFER->m_source = sel;
         OFFER->m_self   = OFFER;
         offer           = OFFER;
@@ -476,12 +488,17 @@ void CWLDataDeviceProtocol::sendSelectionToDevice(SP<IDataDevice> dev, SP<IDataS
 }
 
 void CWLDataDeviceProtocol::onDestroyDataSource(WP<CWLDataSourceResource> source) {
-    if (m_dnd.currentSource == source)
-        abortDrag();
+    for (auto& [seat, drag] : m_drags) {
+        if (drag.currentSource == source)
+            abortDrag(seat);
+    }
 }
 
-void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source) {
+void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source, CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         if (o->m_source && o->m_source->hasDnd())
             continue;
         o->m_dead = true;
@@ -490,10 +507,10 @@ void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source) {
     if (!source) {
         LOG(Log::DEBUG, "resetting selection");
 
-        if (!g_pSeatManager->m_state.keyboardFocusResource)
+        if (!seat->m_state.keyboardFocusResource)
             return;
 
-        auto DESTDEVICE = dataDeviceForClient(g_pSeatManager->m_state.keyboardFocusResource->client());
+        auto DESTDEVICE = dataDeviceForClient(seat->m_state.keyboardFocusResource->client(), seat);
         if (DESTDEVICE && DESTDEVICE->type() == DATA_SOURCE_TYPE_WAYLAND)
             sendSelectionToDevice(DESTDEVICE, nullptr);
 
@@ -502,10 +519,10 @@ void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source) {
 
     LOG(Log::DEBUG, "New selection for data source {:x}", (uintptr_t)source.get());
 
-    if (!g_pSeatManager->m_state.keyboardFocusResource)
+    if (!seat->m_state.keyboardFocusResource)
         return;
 
-    auto DESTDEVICE = dataDeviceForClient(g_pSeatManager->m_state.keyboardFocusResource->client());
+    auto DESTDEVICE = dataDeviceForClient(seat->m_state.keyboardFocusResource->client(), seat);
 
     if (!DESTDEVICE) {
         LOG(Log::DEBUG, "CWLDataDeviceProtocol::setSelection: cannot send selection to a client without a data_device");
@@ -520,182 +537,204 @@ void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source) {
     sendSelectionToDevice(DESTDEVICE, source);
 }
 
-void CWLDataDeviceProtocol::updateSelection() {
-    if (!g_pSeatManager->m_state.keyboardFocusResource)
+void CWLDataDeviceProtocol::updateSelection(CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
+    if (!seat->m_state.keyboardFocusResource)
         return;
 
-    auto DESTDEVICE = dataDeviceForClient(g_pSeatManager->m_state.keyboardFocusResource->client());
+    auto DESTDEVICE = dataDeviceForClient(seat->m_state.keyboardFocusResource->client(), seat);
 
     if (!DESTDEVICE) {
         LOG(Log::DEBUG, "CWLDataDeviceProtocol::onKeyboardFocus: cannot send selection to a client without a data_device");
         return;
     }
 
-    sendSelectionToDevice(DESTDEVICE, g_pSeatManager->m_selection.currentSelection.lock());
+    sendSelectionToDevice(DESTDEVICE, seat->m_selection.currentSelection.lock());
 }
 
-void CWLDataDeviceProtocol::onKeyboardFocus() {
+void CWLDataDeviceProtocol::onKeyboardFocus(CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         if (o->m_source && o->m_source->hasDnd())
             continue;
         o->m_dead = true;
     }
 
-    updateSelection();
+    updateSelection(seat);
 }
 
-void CWLDataDeviceProtocol::onDndPointerFocus() {
+void CWLDataDeviceProtocol::onDndPointerFocus(CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         if (o->m_source && !o->m_source->hasDnd())
             continue;
         o->m_dead = true;
     }
 
-    updateDrag();
+    updateDrag(seat);
 }
 
-void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource, SP<CWLSurfaceResource> dragSurface, SP<CWLSurfaceResource> origin) {
+void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource, SP<CWLSurfaceResource> dragSurface, SP<CWLSurfaceResource> origin, CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
 
-    if (m_dnd.currentSource) {
+    if (drag.currentSource) {
         LOG(Log::WARN, "New drag started while old drag still active??");
-        abortDrag();
+        abortDrag(seat);
     }
 
-    Pointer::Cursor::overrideController->setOverride("grabbing", Pointer::Cursor::CURSOR_OVERRIDE_DND);
-    m_dnd.overriddenCursor = true;
+    if (!seat->m_desktop) {
+        Pointer::Cursor::overrideController->setOverride("grabbing", Pointer::Cursor::CURSOR_OVERRIDE_DND);
+        drag.overriddenCursor = true;
+    }
 
     // For touch-initiated drags, anchor the drag icon to the touch point
     // right away. Until the first touch motion arrives it would otherwise
     // be rendered at the (possibly far away) mouse cursor position.
-    if (g_pInputManager->m_lastInputTouch)
-        m_dnd.touchPos = g_pInputManager->m_touchData.lastTouchPos;
+    if (!seat->m_desktop && g_pInputManager->m_lastInputTouch)
+        drag.touchPos = g_pInputManager->m_touchData.lastTouchPos;
 
     LOG(Log::DEBUG, "initiateDrag: source {:x}, surface: {:x}, origin: {:x}", (uintptr_t)currentSource.get(), (uintptr_t)dragSurface.get(), (uintptr_t)origin.get());
 
     currentSource->m_used = true;
 
-    m_dnd.currentSource = currentSource;
-    m_dnd.originSurface = origin;
-    m_dnd.dndSurface    = dragSurface;
+    drag.currentSource = currentSource;
+    drag.originSurface = origin;
+    drag.dndSurface    = dragSurface;
     if (dragSurface) {
-        m_dnd.dndSurfaceDestroy = dragSurface->m_events.destroy.listen([this] { abortDrag(); });
-        m_dnd.dndSurfaceCommit  = dragSurface->m_events.commit.listen([this] {
-            if (m_dnd.dndSurface->m_current.texture && !m_dnd.dndSurface->m_mapped) {
-                m_dnd.dndSurface->map();
+        drag.dndSurfaceDestroy = dragSurface->m_events.destroy.listen([this, seat] { abortDrag(seat); });
+        drag.dndSurfaceCommit  = dragSurface->m_events.commit.listen([this, seat] {
+            auto& drag = m_drags[seat];
+            if (drag.dndSurface->m_current.texture && !drag.dndSurface->m_mapped) {
+                drag.dndSurface->map();
                 return;
             }
 
-            if (!m_dnd.dndSurface->m_current.texture && m_dnd.dndSurface->m_mapped) {
-                m_dnd.dndSurface->unmap();
+            if (!drag.dndSurface->m_current.texture && drag.dndSurface->m_mapped) {
+                drag.dndSurface->unmap();
                 return;
             }
         });
     }
 
-    m_dnd.mouseButton = Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo&) {
-        if (e.state == WL_POINTER_BUTTON_STATE_RELEASED) {
-            LOG(Log::DEBUG, "Dropping drag on mouseUp");
-            dropDrag();
-        }
-    });
+    if (!seat->m_desktop) {
+        drag.mouseButton = Event::bus()->m_events.input.mouse.button.listen([this, seat](IPointer::SButtonEvent e, Event::SCallbackInfo&) {
+            auto& drag = m_drags[seat];
+            if (e.state == WL_POINTER_BUTTON_STATE_RELEASED) {
+                LOG(Log::DEBUG, "Dropping drag on mouseUp");
+                dropDrag(seat);
+            }
+        });
 
-    m_dnd.touchUp = Event::bus()->m_events.input.touch.up.listen([this](ITouch::SUpEvent e, Event::SCallbackInfo&) {
-        LOG(Log::DEBUG, "Dropping drag on touchUp");
-        dropDrag();
-    });
+        drag.touchUp = Event::bus()->m_events.input.touch.up.listen([this, seat](ITouch::SUpEvent e, Event::SCallbackInfo&) {
+            auto& drag = m_drags[seat];
+            LOG(Log::DEBUG, "Dropping drag on touchUp");
+            dropDrag(seat);
+        });
 
-    m_dnd.tabletTip = Event::bus()->m_events.input.tablet.tip.listen([this](CTablet::STipEvent e, Event::SCallbackInfo&) {
-        if (!e.in) {
-            LOG(Log::DEBUG, "Dropping drag on tablet tipUp");
-            dropDrag();
-        }
-    });
+        drag.tabletTip = Event::bus()->m_events.input.tablet.tip.listen([this, seat](CTablet::STipEvent e, Event::SCallbackInfo&) {
+            auto& drag = m_drags[seat];
+            if (!e.in) {
+                LOG(Log::DEBUG, "Dropping drag on tablet tipUp");
+                dropDrag(seat);
+            }
+        });
 
-    m_dnd.mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D pos, Event::SCallbackInfo&) {
-        if (m_dnd.focusedDevice && g_pSeatManager->m_state.dndPointerFocus) {
-            auto surf = Desktop::View::CWLSurface::fromResource(g_pSeatManager->m_state.dndPointerFocus.lock());
+        drag.mouseMove = Event::bus()->m_events.input.mouse.move.listen([this, seat](Vector2D pos, Event::SCallbackInfo&) {
+            auto& drag = m_drags[seat];
+            if (drag.focusedDevice && seat->m_state.dndPointerFocus) {
+                auto surf = Desktop::View::CWLSurface::fromResource(seat->m_state.dndPointerFocus.lock());
 
-            if (!surf)
-                return;
+                if (!surf)
+                    return;
 
-            const auto box = surf->getSurfaceBoxGlobal();
+                const auto box = surf->getSurfaceBoxGlobal();
 
-            if (!box.has_value())
-                return;
+                if (!box.has_value())
+                    return;
 
-            m_dnd.focusedDevice->sendMotion(Time::millis(Time::steadyNow()), pos - box->pos());
-            LOG(Log::DEBUG, "Drag motion {}", pos - box->pos());
-        }
-    });
+                drag.focusedDevice->sendMotion(Time::millis(Time::steadyNow()), pos - box->pos());
+                LOG(Log::DEBUG, "Drag motion {}", pos - box->pos());
+            }
+        });
 
-    m_dnd.touchMove = Event::bus()->m_events.input.touch.motion.listen([this](ITouch::SMotionEvent e, Event::SCallbackInfo&) {
-        // Mirror the mouse drag path: the input layer (CInputManager::onTouchMove)
-        // refocuses dndPointerFocus from the global touch position; here we just
-        // send surface-local motion against the currently focused dnd surface.
-        if (m_dnd.focusedDevice && g_pSeatManager->m_state.dndPointerFocus) {
-            auto surf = Desktop::View::CWLSurface::fromResource(g_pSeatManager->m_state.dndPointerFocus.lock());
+        drag.touchMove = Event::bus()->m_events.input.touch.motion.listen([this, seat](ITouch::SMotionEvent e, Event::SCallbackInfo&) {
+            auto& drag = m_drags[seat];
+            // Mirror the mouse drag path: the input layer (CInputManager::onTouchMove)
+            // refocuses dndPointerFocus from the global touch position; here we just
+            // send surface-local motion against the currently focused dnd surface.
+            if (drag.focusedDevice && seat->m_state.dndPointerFocus) {
+                auto surf = Desktop::View::CWLSurface::fromResource(seat->m_state.dndPointerFocus.lock());
 
-            if (!surf)
-                return;
+                if (!surf)
+                    return;
 
-            const auto box = surf->getSurfaceBoxGlobal();
+                const auto box = surf->getSurfaceBoxGlobal();
 
-            if (!box.has_value())
-                return;
+                if (!box.has_value())
+                    return;
 
-            const auto POS = g_pInputManager->m_touchData.lastTouchPos;
+                const auto POS = g_pInputManager->m_touchData.lastTouchPos;
 
-            m_dnd.touchPos = POS;
+                drag.touchPos = POS;
 
-            m_dnd.focusedDevice->sendMotion(e.timeMs, POS - box->pos());
-            LOG(Log::DEBUG, "Drag motion {}", POS - box->pos());
-        }
-    });
-
+                drag.focusedDevice->sendMotion(e.timeMs, POS - box->pos());
+                LOG(Log::DEBUG, "Drag motion {}", POS - box->pos());
+            }
+        });
+    }
     // unfocus the pointer from the surface, this is part of """standard""" wayland procedure and gtk will freak out if this isn't happening.
     // BTW, the spec does NOT require this explicitly...
     // Fuck you gtk.
-    const auto LASTDNDFOCUS = g_pSeatManager->m_state.dndPointerFocus;
-    g_pSeatManager->setPointerFocus(nullptr, {});
-    g_pSeatManager->m_state.dndPointerFocus = LASTDNDFOCUS;
+    const auto LASTDNDFOCUS = seat->m_state.dndPointerFocus;
+    seat->setPointerFocus(nullptr, {});
+    seat->m_state.dndPointerFocus = LASTDNDFOCUS;
 
     // make a new offer, etc
-    updateDrag();
+    updateDrag(seat);
 }
 
-void CWLDataDeviceProtocol::updateDrag() {
-    if (!dndActive())
+void CWLDataDeviceProtocol::updateDrag(CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
+    if (!dndActive(seat))
         return;
 
-    if (m_dnd.focusedDevice)
-        m_dnd.focusedDevice->sendLeave();
+    if (drag.focusedDevice)
+        drag.focusedDevice->sendLeave();
 
-    auto surface = g_pSeatManager->m_state.dndPointerFocus.lock();
+    auto surface = seat->m_state.dndPointerFocus.lock();
     if (!surface)
         return;
 
-    m_dnd.focusedDevice = dataDeviceForClient(surface->client());
+    drag.focusedDevice = dataDeviceForClient(surface->client(), seat);
 
-    if (!m_dnd.focusedDevice)
+    if (!drag.focusedDevice)
         return;
 
     SP<IDataOffer> offer;
 
-    if (const auto WL = m_dnd.focusedDevice->getWayland(); WL) {
+    if (const auto WL = drag.focusedDevice->getWayland(); WL) {
         const auto OFFER =
-            m_offers.emplace_back(makeShared<CWLDataOfferResource>(makeShared<CWlDataOffer>(WL->m_resource->client(), WL->m_resource->version(), 0), m_dnd.currentSource.lock()));
+            m_offers.emplace_back(makeShared<CWLDataOfferResource>(makeShared<CWlDataOffer>(WL->m_resource->client(), WL->m_resource->version(), 0), drag.currentSource.lock()));
         if (!OFFER->good()) {
             WL->m_resource->noMemory();
             m_offers.pop_back();
             return;
         }
-        OFFER->m_source = m_dnd.currentSource;
+        OFFER->m_seat   = seat;
+        OFFER->m_source = drag.currentSource;
         OFFER->m_self   = OFFER;
         offer           = OFFER;
     }
 #ifndef NO_XWAYLAND
-    else if (const auto X11 = m_dnd.focusedDevice->getX11(); X11)
-        offer = g_pXWayland->m_wm->createX11DataOffer(g_pSeatManager->m_state.keyboardFocus.lock(), m_dnd.currentSource.lock());
+    else if (const auto X11 = drag.focusedDevice->getX11(); X11)
+        offer = g_pXWayland->m_wm->createX11DataOffer(seat->m_state.keyboardFocus.lock(), drag.currentSource.lock());
 #endif
 
     if (!offer) {
@@ -704,74 +743,83 @@ void CWLDataDeviceProtocol::updateDrag() {
     }
 
     LOG(Log::DEBUG, "New {} dnd offer {:x} for data source {:x}", offer->type() == DATA_SOURCE_TYPE_WAYLAND ? "wayland" : "X11", (uintptr_t)offer.get(),
-        (uintptr_t)m_dnd.currentSource.get());
+        (uintptr_t)drag.currentSource.get());
 
-    m_dnd.focusedDevice->sendDataOffer(offer);
+    drag.focusedDevice->sendDataOffer(offer);
     if (const auto WL = offer->getWayland(); WL)
         WL->sendData();
-    m_dnd.focusedDevice->sendEnter(wl_display_next_serial(g_pCompositor->m_wlDisplay), surface, surface->m_current.size / 2.F, offer);
+    drag.focusedDevice->sendEnter(wl_display_next_serial(g_pCompositor->m_wlDisplay), surface, surface->m_current.size / 2.F, offer);
 }
 
-void CWLDataDeviceProtocol::cleanupDndState(bool resetDevice, bool resetSource, bool simulateInput) {
-    m_dnd.dndSurface.reset();
-    m_dnd.dndSurfaceCommit.reset();
-    m_dnd.dndSurfaceDestroy.reset();
-    m_dnd.mouseButton.reset();
-    m_dnd.mouseMove.reset();
-    m_dnd.touchUp.reset();
-    m_dnd.touchMove.reset();
-    m_dnd.touchPos.reset();
-    m_dnd.tabletTip.reset();
+void CWLDataDeviceProtocol::cleanupDndState(bool resetDevice, bool resetSource, bool simulateInput, CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
+    drag.dndSurface.reset();
+    drag.dndSurfaceCommit.reset();
+    drag.dndSurfaceDestroy.reset();
+    drag.mouseButton.reset();
+    drag.mouseMove.reset();
+    drag.touchUp.reset();
+    drag.touchMove.reset();
+    drag.touchPos.reset();
+    drag.tabletTip.reset();
 
     if (resetDevice)
-        m_dnd.focusedDevice.reset();
+        drag.focusedDevice.reset();
     if (resetSource)
-        m_dnd.currentSource.reset();
+        drag.currentSource.reset();
 
     if (simulateInput) {
-        g_pInputManager->simulateMouseMovement();
-        g_pSeatManager->resendEnterEvents();
+        if (seat->m_desktop)
+            seat->m_desktop->refocus();
+        else
+            g_pInputManager->simulateMouseMovement();
+        seat->resendEnterEvents();
     }
 }
 
-void CWLDataDeviceProtocol::dropDrag() {
-    if (!m_dnd.focusedDevice || !m_dnd.currentSource) {
-        if (m_dnd.currentSource)
-            abortDrag();
+void CWLDataDeviceProtocol::dropDrag(CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
+    if (!drag.focusedDevice || !drag.currentSource) {
+        if (drag.currentSource)
+            abortDrag(seat);
         return;
     }
 
-    if (!wasDragSuccessful()) {
-        abortDrag();
+    if (!wasDragSuccessful(seat)) {
+        abortDrag(seat);
         return;
     }
 
-    m_dnd.focusedDevice->sendDrop();
+    drag.focusedDevice->sendDrop();
 
 #ifndef NO_XWAYLAND
-    if (m_dnd.focusedDevice->getX11()) {
-        m_dnd.focusedDevice->sendLeave();
-        if (m_dnd.overriddenCursor)
+    if (drag.focusedDevice->getX11()) {
+        drag.focusedDevice->sendLeave();
+        if (drag.overriddenCursor)
             Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_DND);
-        m_dnd.overriddenCursor = false;
-        cleanupDndState(true, true, true);
+        drag.overriddenCursor = false;
+        cleanupDndState(true, true, true, seat);
         return;
     }
 #endif
 
-    m_dnd.focusedDevice->sendLeave();
-    if (m_dnd.overriddenCursor)
+    drag.focusedDevice->sendLeave();
+    if (drag.overriddenCursor)
         Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_DND);
-    m_dnd.overriddenCursor = false;
-    cleanupDndState(false, false, false);
+    drag.overriddenCursor = false;
+    cleanupDndState(false, false, false, seat);
 }
 
-bool CWLDataDeviceProtocol::wasDragSuccessful() {
-    if (!m_dnd.currentSource)
+bool CWLDataDeviceProtocol::wasDragSuccessful(CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
+    if (!drag.currentSource)
         return false;
 
     for (auto const& o : m_offers) {
-        if (o->m_dead || o->m_source != m_dnd.currentSource)
+        if (o->m_dead || o->m_source != drag.currentSource)
             continue;
 
         if (o->m_recvd || o->m_accepted)
@@ -779,82 +827,123 @@ bool CWLDataDeviceProtocol::wasDragSuccessful() {
     }
 
 #ifndef NO_XWAYLAND
-    if (m_dnd.focusedDevice->getX11())
+    if (drag.focusedDevice->getX11())
         return true;
 #endif
 
     return false;
 }
 
-void CWLDataDeviceProtocol::completeDrag() {
-    if (!m_dnd.focusedDevice && !m_dnd.currentSource)
+void CWLDataDeviceProtocol::completeDrag(CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
+    if (!drag.focusedDevice && !drag.currentSource)
         return;
 
-    if (m_dnd.currentSource) {
-        m_dnd.currentSource->sendDndDropPerformed();
-        m_dnd.currentSource->sendDndFinished();
+    if (drag.currentSource) {
+        drag.currentSource->sendDndDropPerformed();
+        drag.currentSource->sendDndFinished();
     }
 
-    cleanupDndState(true, true, true);
+    cleanupDndState(true, true, true, seat);
 }
 
-void CWLDataDeviceProtocol::abortDrag() {
-    cleanupDndState(false, false, false);
+void CWLDataDeviceProtocol::abortDrag(CSeatManager* seat) {
+    seat       = seat ? seat : g_pSeatManager.get();
+    auto& drag = m_drags[seat];
+    cleanupDndState(false, false, false, seat);
 
-    if (m_dnd.overriddenCursor)
+    if (drag.overriddenCursor)
         Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_DND);
-    m_dnd.overriddenCursor = false;
+    drag.overriddenCursor = false;
 
-    if (!m_dnd.focusedDevice && !m_dnd.currentSource)
+    if (!drag.focusedDevice && !drag.currentSource)
         return;
 
-    if (m_dnd.focusedDevice) {
+    if (drag.focusedDevice) {
 #ifndef NO_XWAYLAND
-        if (auto x11Device = m_dnd.focusedDevice->getX11(); x11Device)
+        if (auto x11Device = drag.focusedDevice->getX11(); x11Device)
             x11Device->forceCleanupDnd();
 #endif
-        m_dnd.focusedDevice->sendLeave();
+        drag.focusedDevice->sendLeave();
     }
 
-    if (m_dnd.currentSource)
-        m_dnd.currentSource->cancelled();
+    if (drag.currentSource)
+        drag.currentSource->cancelled();
 
-    m_dnd.focusedDevice.reset();
-    m_dnd.currentSource.reset();
+    drag.focusedDevice.reset();
+    drag.currentSource.reset();
 
-    g_pInputManager->simulateMouseMovement();
-    g_pSeatManager->resendEnterEvents();
+    if (seat->m_desktop)
+        seat->m_desktop->refocus();
+    else
+        g_pInputManager->simulateMouseMovement();
+    seat->resendEnterEvents();
 }
 
 void CWLDataDeviceProtocol::renderDND(Render::CRenderContext& ctx, PHLMONITOR pMonitor, const Time::steady_tp& when) {
-    if (!m_dnd.dndSurface || !m_dnd.dndSurface->m_current.texture)
-        return;
+    for (auto& [seat, drag] : m_drags) {
+        if (seat->m_desktop && seat->m_desktop->monitor() != pMonitor)
+            continue;
+        if (!drag.dndSurface || !drag.dndSurface->m_current.texture)
+            continue;
 
-    const auto POS = m_dnd.touchPos.value_or(g_pInputManager->getMouseCoordsInternal());
+        const auto POS = drag.touchPos.value_or(seat->m_desktop ? seat->m_desktop->pointer()->position() : g_pInputManager->getMouseCoordsInternal());
 
-    Vector2D   surfacePos = POS;
+        Vector2D   surfacePos = POS;
 
-    surfacePos += m_dnd.dndSurface->m_current.offset;
+        surfacePos += drag.dndSurface->m_current.offset;
 
-    CBox                         box = CBox{surfacePos, m_dnd.dndSurface->m_current.size}.translate(-pMonitor->m_position).scale(pMonitor->m_scale).round();
+        CBox                         box = CBox{surfacePos, drag.dndSurface->m_current.size}.translate(-pMonitor->m_position).scale(pMonitor->m_scale).round();
 
-    CTexPassElement::SRenderData data;
-    data.tex = m_dnd.dndSurface->m_current.texture;
-    data.box = box;
-    g_pHyprRenderer->addPassElement(ctx, makeUnique<CTexPassElement>(std::move(data)));
+        CTexPassElement::SRenderData data;
+        data.tex = drag.dndSurface->m_current.texture;
+        data.box = box;
+        g_pHyprRenderer->addPassElement(ctx, makeUnique<CTexPassElement>(std::move(data)));
 
-    CBox damageBox = CBox{surfacePos, m_dnd.dndSurface->m_current.size}.expand(5);
-    g_pHyprRenderer->damageBox(damageBox);
+        CBox damageBox = CBox{surfacePos, drag.dndSurface->m_current.size}.expand(5);
+        g_pHyprRenderer->damageBox(damageBox);
 
-    m_dnd.dndSurface->frame(when);
+        drag.dndSurface->frame(when);
+    }
 }
 
-bool CWLDataDeviceProtocol::dndActive() {
-    return !!m_dnd.currentSource;
+bool CWLDataDeviceProtocol::dndActive(CSeatManager* seat) {
+    seat             = seat ? seat : g_pSeatManager.get();
+    const auto found = m_drags.find(seat);
+    return found != m_drags.end() && !!found->second.currentSource;
 }
 
-void CWLDataDeviceProtocol::abortDndIfPresent() {
-    if (!dndActive())
+void CWLDataDeviceProtocol::abortDndIfPresent(CSeatManager* seat) {
+    if (!dndActive(seat))
         return;
-    abortDrag();
+    abortDrag(seat);
+}
+
+CSeatManager* CWLDataDeviceResource::manager() const {
+    return m_seat->manager();
+}
+
+void CWLDataDeviceProtocol::dragMotion(CSeatManager* seat, const Vector2D& position, uint32_t timeMs) {
+    if (!dndActive(seat))
+        return;
+    auto&      drag    = m_drags[seat];
+    const auto surface = Desktop::View::CWLSurface::fromResource(seat->m_state.dndPointerFocus.lock());
+    LOG(Log::DEBUG, "DND motion for seat {:x}, device {:x}, surface {:x}, at {}", (uintptr_t)seat, (uintptr_t)drag.focusedDevice.get(), (uintptr_t)surface.get(), position);
+    if (!drag.focusedDevice || !surface)
+        return;
+    const auto box = surface->getSurfaceBoxGlobal();
+    if (box)
+        drag.focusedDevice->sendMotion(timeMs, position - box->pos());
+}
+void CWLDataDeviceProtocol::dragButton(CSeatManager* seat, uint32_t state) {
+    if (dndActive(seat) && state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        LOG(Log::DEBUG, "Dropping DND for seat {:x}", (uintptr_t)seat);
+        dropDrag(seat);
+    }
+}
+
+void CWLDataDeviceProtocol::forgetSeat(CSeatManager* seat) {
+    abortDndIfPresent(seat);
+    m_drags.erase(seat);
 }

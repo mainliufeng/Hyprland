@@ -5,6 +5,10 @@
 #include "../helpers/signal/Signal.hpp"
 #include "cursor-shape-v1.hpp"
 
+class CSeatManager;
+class CWLPointerResource;
+class CWLSeatResource;
+
 class CCursorShapeProtocol : public IWaylandProtocol {
   public:
     CCursorShapeProtocol(const wl_interface* iface, const int& ver, const std::string& name);
@@ -13,6 +17,9 @@ class CCursorShapeProtocol : public IWaylandProtocol {
 
     struct SSetShapeEvent {
         CWpCursorShapeDeviceV1*    pMgr = nullptr;
+        CSeatManager*              seat = nullptr;
+        SP<CWLSeatResource>        resource;
+        uint32_t                   serial = 0;
         wpCursorShapeDeviceV1Shape shape;
         std::string                shapeName;
     };
@@ -32,8 +39,9 @@ class CCursorShapeProtocol : public IWaylandProtocol {
     void createCursorShapeDevice(CWpCursorShapeManagerV1* pMgr, uint32_t id, wl_resource* resource);
 
     //
-    std::vector<UP<CWpCursorShapeDeviceV1>>  m_devices;
-    std::vector<UP<CWpCursorShapeManagerV1>> m_managers;
+    std::unordered_map<CWpCursorShapeDeviceV1*, WP<CWLPointerResource>> m_pointers;
+    std::vector<UP<CWpCursorShapeDeviceV1>>                             m_devices;
+    std::vector<UP<CWpCursorShapeManagerV1>>                            m_managers;
 };
 
 namespace PROTO {

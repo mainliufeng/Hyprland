@@ -15,6 +15,7 @@ namespace Render {
 #include <vector>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include "../WaylandProtocol.hpp"
 #include <wayland-server-protocol.h>
 #include "wayland.hpp"
@@ -24,6 +25,8 @@ namespace Render {
 #include "../types/DataDevice.hpp"
 #include <hyprutils/os/FileDescriptor.hpp>
 
+class CSeatManager;
+class CWLSeatResource;
 class CWLDataDeviceResource;
 class CWLDataDeviceManagerResource;
 class CWLDataSourceResource;
@@ -35,6 +38,8 @@ class CWLDataOfferResource : public IDataOffer {
   public:
     CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataSource> source_);
     ~CWLDataOfferResource();
+
+    CSeatManager*                    m_seat = nullptr;
 
     bool                             good();
     void                             sendData();
@@ -97,7 +102,8 @@ class CWLDataSourceResource : public IDataSource {
 
 class CWLDataDeviceResource : public IDataDevice {
   public:
-    CWLDataDeviceResource(SP<CWlDataDevice> resource_);
+    CWLDataDeviceResource(SP<CWlDataDevice> resource_, SP<CWLSeatResource> seat);
+    CSeatManager*                     manager() const;
 
     bool                              good();
     wl_client*                        client();
@@ -115,6 +121,8 @@ class CWLDataDeviceResource : public IDataDevice {
     WP<CWLDataDeviceResource>         m_self;
 
   private:
+    SP<CWLSeatResource>    m_seat;
+    CHyprSignalListener    m_focusListener;
     SP<CWlDataDevice>      m_resource;
     wl_client*             m_client = nullptr;
 
@@ -146,10 +154,13 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
     void renderDND(Render::CRenderContext& ctx, PHLMONITOR pMonitor, const Time::steady_tp& when);
     // for inputmgr to force refocus
     // TODO: move handling to seatmgr
-    bool dndActive();
+    bool dndActive(CSeatManager* seat = nullptr);
+    void dragMotion(CSeatManager* seat, const Vector2D& position, uint32_t timeMs);
+    void forgetSeat(CSeatManager* seat);
+    void dragButton(CSeatManager* seat, uint32_t state);
 
     // called on an escape key pressed, for moments where it gets stuck
-    void abortDndIfPresent();
+    void abortDndIfPresent(CSeatManager* seat = nullptr);
 
   private:
     void destroyResource(CWLDataDeviceManagerResource* resource);
@@ -166,13 +177,13 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
     //
 
     void onDestroyDataSource(WP<CWLDataSourceResource> source);
-    void setSelection(SP<IDataSource> source);
+    void setSelection(SP<IDataSource> source, CSeatManager* seat = nullptr);
     void sendSelectionToDevice(SP<IDataDevice> dev, SP<IDataSource> sel);
-    void updateSelection();
-    void onKeyboardFocus();
-    void onDndPointerFocus();
+    void updateSelection(CSeatManager* seat = nullptr);
+    void onKeyboardFocus(CSeatManager* seat = nullptr);
+    void onDndPointerFocus(CSeatManager* seat = nullptr);
 
-    struct {
+    struct SDndState {
         WP<IDataDevice>         focusedDevice;
         WP<IDataSource>         currentSource;
         WP<CWLSurfaceResource>  dndSurface;
@@ -188,20 +199,22 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
         CHyprSignalListener touchUp;
         CHyprSignalListener touchMove;
         CHyprSignalListener tabletTip;
-    } m_dnd;
+    };
+    std::unordered_map<CSeatManager*, SDndState> m_drags;
 
-    void abortDrag();
-    void initiateDrag(WP<CWLDataSourceResource> currentSource, SP<CWLSurfaceResource> dragSurface, SP<CWLSurfaceResource> origin);
-    void updateDrag();
-    void dropDrag();
-    void completeDrag();
-    void cleanupDndState(bool resetDevice, bool resetSource, bool simulateInput);
-    bool wasDragSuccessful();
+    void                                         abortDrag(CSeatManager* seat = nullptr);
+    void initiateDrag(WP<CWLDataSourceResource> currentSource, SP<CWLSurfaceResource> dragSurface, SP<CWLSurfaceResource> origin, CSeatManager* seat = nullptr);
+    void updateDrag(CSeatManager* seat = nullptr);
+    void dropDrag(CSeatManager* seat = nullptr);
+    void completeDrag(CSeatManager* seat = nullptr);
+    void cleanupDndState(bool resetDevice, bool resetSource, bool simulateInput, CSeatManager* seat = nullptr);
+    bool wasDragSuccessful(CSeatManager* seat = nullptr);
 
     //
-    SP<IDataDevice> dataDeviceForClient(wl_client*);
+    SP<IDataDevice> dataDeviceForClient(wl_client*, CSeatManager* seat = nullptr);
 
     friend class CSeatManager;
+    friend class CSeatDesktop;
     friend class CWLDataDeviceManagerResource;
     friend class CWLDataDeviceResource;
     friend class CWLDataSourceResource;

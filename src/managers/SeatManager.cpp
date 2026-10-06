@@ -1,4 +1,6 @@
 #include "SeatManager.hpp"
+#include "SeatDesktop.hpp"
+#include "../pointer/PointerManager.hpp"
 #include "../protocols/core/Seat.hpp"
 #include "../protocols/core/DataDevice.hpp"
 #include "../protocols/DataDeviceWlr.hpp"
@@ -88,17 +90,22 @@ void CKeyboardEventHandlerStack::pruneHandlers() {
     std::erase_if(m_handlers, [](const auto& handler) { return handler.expired(); });
 }
 
-CSeatManager::CSeatManager() {
-    m_listeners.newSeatResource = PROTO::seat->m_events.newSeatResource.listen([this](const auto& resource) { onNewSeatResource(resource); });
+CSeatManager::CSeatManager(CWLSeatProtocol* protocol) : m_protocol(protocol ? protocol : PROTO::seat.get()) {
+    m_protocol->m_manager       = this;
+    m_listeners.newSeatResource = m_protocol->m_events.newSeatResource.listen([this](const auto& resource) { onNewSeatResource(resource); });
 }
 
-CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res) : resource(res) {
-    listeners.destroy = res->m_events.destroy.listen(
-        [this] { std::erase_if(g_pSeatManager->m_seatResources, [this](const auto& e) { return e->resource.expired() || e->resource == resource; }); });
+CWLSeatProtocol* CSeatManager::protocol() const {
+    return m_protocol;
+}
+
+CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res, CSeatManager* owner) : resource(res) {
+    listeners.destroy =
+        res->m_events.destroy.listen([this, owner] { std::erase_if(owner->m_seatResources, [this](const auto& e) { return e->resource.expired() || e->resource == resource; }); });
 }
 
 void CSeatManager::onNewSeatResource(SP<CWLSeatResource> resource) {
-    m_seatResources.emplace_back(makeShared<SSeatResourceContainer>(resource));
+    m_seatResources.emplace_back(makeShared<SSeatResourceContainer>(resource, this));
 }
 
 SP<CSeatManager::SSeatResourceContainer> CSeatManager::containerForResource(SP<CWLSeatResource> seatResource) {
@@ -205,8 +212,12 @@ bool CSeatManager::pointerButtonSerialValid(SP<CWLSeatResource> seatResource, ui
     return false;
 }
 
+bool CSeatManager::hasCapability(eHIDCapabilityType cap) const {
+    return m_protocol->m_currentCaps & cap;
+}
+
 void CSeatManager::updateCapabilities(uint32_t capabilities) {
-    PROTO::seat->updateCapabilities(capabilities);
+    m_protocol->updateCapabilities(capabilities);
 }
 
 void CSeatManager::setMouse(SP<IPointer> MAUZ) {
@@ -232,16 +243,17 @@ void CSeatManager::setKeyboard(SP<IKeyboard> KEEB) {
 
 void CSeatManager::updateActiveKeyboardData() {
     if (m_keyboard)
-        PROTO::seat->updateRepeatInfo(m_keyboard->m_repeatRate, m_keyboard->m_repeatDelay);
-    PROTO::seat->updateKeymap();
-    PROTO::inputCapture->updateKeymap();
+        m_protocol->updateRepeatInfo(m_keyboard->m_repeatRate, m_keyboard->m_repeatDelay);
+    m_protocol->updateKeymap();
+    if (!m_desktop)
+        PROTO::inputCapture->updateKeymap();
 }
 
 void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     if (m_state.keyboardFocus == surf)
         return;
 
-    if (!g_pInputManager->anyHidHasCap(HID_INPUT_CAPABILITY_KEYBOARD)) {
+    if (!hasCapability(HID_INPUT_CAPABILITY_KEYBOARD)) {
         LOG(Log::ERR, "BUG THIS: setKeyboardFocus without a valid keyboard capability");
         return;
     }
@@ -250,11 +262,12 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
 
     // Don't gate leave on m_state.keyboardFocusResource — the WP can
     // be stale. sendLeave no-ops on keyboards without m_currentSurface.
-    for (auto const& k : PROTO::seat->m_keyboards) {
+    for (auto const& k : m_protocol->m_keyboards) {
         if (!k)
             continue;
 
-        k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
+        if (m_keyboard)
+            k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
         k->sendLeave();
     }
 
@@ -270,7 +283,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     wl_array_init(&keys);
     CScopeGuard x([&keys] { wl_array_release(&keys); });
 
-    const auto& PRESSED = g_pInputManager->getKeysFromAllKBs();
+    const auto  PRESSED = m_desktop ? m_desktop->pressedKeys() : g_pInputManager->getKeysFromAllKBs();
     static_assert(std::is_same_v<std::decay_t<decltype(PRESSED)>::value_type, uint32_t>, "Element type different from keycode type uint32_t");
 
     const auto PRESSEDARRSIZE = PRESSED.size() * sizeof(uint32_t);
@@ -294,7 +307,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
             uint32_t depressed = m_keyboard->m_modifiersState.depressed;
             uint32_t latched   = m_keyboard->m_modifiersState.latched;
             uint32_t locked    = m_keyboard->m_modifiersState.locked;
-            for (auto const& kb : g_pInputManager->m_keyboards) {
+            for (auto const& kb : m_desktop ? m_desktop->keyboards() : g_pInputManager->m_keyboards) {
                 if (!kb->m_enabled || !kb->shareStates() || (kb->isVirtual() && g_pInputManager->shouldIgnoreVirtualKeyboard(kb)))
                     continue;
                 depressed |= kb->m_modifiersState.depressed;
@@ -345,7 +358,7 @@ void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32
 }
 
 void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& local) {
-    const bool dndActive = PROTO::data && PROTO::data->dndActive();
+    const bool dndActive = PROTO::data && PROTO::data->dndActive(this);
 
     if (m_state.pointerFocus == surf)
         return;
@@ -359,7 +372,7 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
         return;
     }
 
-    if (!g_pInputManager->anyHidHasCap(HID_INPUT_CAPABILITY_POINTER)) {
+    if (!hasCapability(HID_INPUT_CAPABILITY_POINTER)) {
         LOG(Log::ERR, "BUG THIS: setPointerFocus without a valid pointer input");
         return;
     }
@@ -367,10 +380,10 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     m_listeners.pointerSurfaceDestroy.reset();
 
     const auto OLDSURF = Desktop::View::CWLSurface::fromResource(m_state.pointerFocus.lock());
-    if (OLDSURF && OLDSURF->constraint())
-        OLDSURF->constraint()->deactivate();
+    if (OLDSURF && OLDSURF->constraint(this))
+        OLDSURF->constraint(this)->deactivate();
 
-    for (auto const& p : PROTO::seat->m_pointers) {
+    for (auto const& p : m_protocol->m_pointers) {
         if (!p)
             continue;
 
@@ -390,8 +403,8 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     }
 
     const auto SURF = Desktop::View::CWLSurface::fromResource(surf);
-    if (SURF && SURF->constraint())
-        SURF->constraint()->activate();
+    if (SURF && SURF->constraint(this))
+        SURF->constraint(this)->activate();
 
     m_state.dndPointerFocus = surf;
 
@@ -440,7 +453,7 @@ void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
 }
 
 void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state_) {
-    if (!m_state.pointerFocusResource || (PROTO::data && PROTO::data->dndActive()))
+    if (!m_state.pointerFocusResource || (PROTO::data && PROTO::data->dndActive(this)))
         return;
 
     for (auto const& s : m_seatResources) {
@@ -651,7 +664,7 @@ void CSeatManager::refocusGrab() {
 
     if (!m_seatGrab->m_surfs.empty()) {
         // try to find a surf in focus first
-        const auto MOUSE = g_pInputManager->getMouseCoordsInternal();
+        const auto MOUSE = m_desktop ? m_desktop->pointer()->position() : g_pInputManager->getMouseCoordsInternal();
         for (auto const& s : m_seatGrab->m_surfs) {
             auto hlSurf = Desktop::View::CWLSurface::fromResource(s.lock());
             if (!hlSurf)
@@ -695,7 +708,7 @@ void CSeatManager::onSetCursor(SP<CWLSeatResource> seatResource, uint32_t serial
 }
 
 SP<CWLSeatResource> CSeatManager::seatResourceForClient(wl_client* client) {
-    return PROTO::seat->seatResourceForClient(client);
+    return m_protocol->seatResourceForClient(client);
 }
 
 void CSeatManager::setCurrentSelection(SP<IDataSource> source) {
@@ -710,18 +723,18 @@ void CSeatManager::setCurrentSelection(SP<IDataSource> source) {
         m_selection.currentSelection->cancelled();
 
     if (!source) {
-        PROTO::data->setSelection(nullptr);
-        PROTO::dataWlr->setSelection(nullptr, false);
-        PROTO::extDataDevice->setSelection(nullptr, false);
+        PROTO::data->setSelection(nullptr, this);
+        PROTO::dataWlr->setSelection(nullptr, false, this);
+        PROTO::extDataDevice->setSelection(nullptr, false, this);
     }
 
     m_selection.currentSelection = source;
 
     if (source) {
         m_selection.destroySelection = source->m_events.destroy.listen([this] { setCurrentSelection(nullptr); });
-        PROTO::data->setSelection(source);
-        PROTO::dataWlr->setSelection(source, false);
-        PROTO::extDataDevice->setSelection(source, false);
+        PROTO::data->setSelection(source, this);
+        PROTO::dataWlr->setSelection(source, false, this);
+        PROTO::extDataDevice->setSelection(source, false, this);
     }
 
     m_events.setSelection.emit();
@@ -739,24 +752,39 @@ void CSeatManager::setCurrentPrimarySelection(SP<IDataSource> source) {
         m_selection.currentPrimarySelection->cancelled();
 
     if (!source) {
-        PROTO::primarySelection->setSelection(nullptr);
-        PROTO::dataWlr->setSelection(nullptr, true);
-        PROTO::extDataDevice->setSelection(nullptr, true);
+        PROTO::primarySelection->setSelection(nullptr, this);
+        PROTO::dataWlr->setSelection(nullptr, true, this);
+        PROTO::extDataDevice->setSelection(nullptr, true, this);
     }
 
     m_selection.currentPrimarySelection = source;
 
     if (source) {
         m_selection.destroyPrimarySelection = source->m_events.destroy.listen([this] { setCurrentPrimarySelection(nullptr); });
-        PROTO::primarySelection->setSelection(source);
-        PROTO::dataWlr->setSelection(source, true);
-        PROTO::extDataDevice->setSelection(source, true);
+        PROTO::primarySelection->setSelection(source, this);
+        PROTO::dataWlr->setSelection(source, true, this);
+        PROTO::extDataDevice->setSelection(source, true, this);
     }
 
     m_events.setPrimarySelection.emit();
 }
 
 void CSeatManager::setGrab(SP<CSeatGrab> grab) {
+    if (grab)
+        grab->m_owner = this;
+    if (m_desktop) {
+        if (m_seatGrab == grab)
+            return;
+        auto oldGrab = m_seatGrab;
+        m_seatGrab   = grab;
+        if (oldGrab && oldGrab->m_onEnd)
+            oldGrab->m_onEnd();
+        if (grab)
+            refocusGrab();
+        else
+            m_desktop->refocus(0, true);
+        return;
+    }
     if (m_seatGrab) {
         auto oldGrab = m_seatGrab;
 
@@ -885,8 +913,8 @@ void CSeatGrab::add(SP<CWLSurfaceResource> surf) {
 
 void CSeatGrab::remove(SP<CWLSurfaceResource> surf) {
     std::erase(m_surfs, surf);
-    if ((m_keyboard && g_pSeatManager->m_state.keyboardFocus == surf) || (m_pointer && g_pSeatManager->m_state.pointerFocus == surf))
-        g_pSeatManager->refocusGrab();
+    if (m_owner && ((m_keyboard && m_owner->m_state.keyboardFocus == surf) || (m_pointer && m_owner->m_state.pointerFocus == surf)))
+        m_owner->refocusGrab();
 }
 
 void CSeatGrab::setCallback(std::function<void()> onEnd_) {

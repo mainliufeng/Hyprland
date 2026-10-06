@@ -9,10 +9,13 @@
 #include "../helpers/math/Math.hpp"
 
 class CWLSurfaceResource;
+class CWLSeatResource;
+class CSeatManager;
 
 class CTextInputV3 {
   public:
-    CTextInputV3(SP<CZwpTextInputV3> resource_);
+    CTextInputV3(SP<CZwpTextInputV3> resource_, SP<CWLSeatResource> seat);
+    CSeatManager* manager() const;
     ~CTextInputV3();
 
     void       enter(SP<CWLSurfaceResource> surf);
@@ -68,6 +71,7 @@ class CTextInputV3 {
     SState m_current;
 
   private:
+    SP<CWLSeatResource> m_seat;
     SP<CZwpTextInputV3> m_resource;
 
     int                 m_serial = 0;

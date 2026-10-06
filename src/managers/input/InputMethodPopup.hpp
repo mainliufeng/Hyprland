@@ -6,10 +6,11 @@
 #include "../../helpers/signal/Signal.hpp"
 
 class CInputMethodPopupV2;
+class CInputMethodRelay;
 
 class CInputPopup {
   public:
-    CInputPopup(SP<CInputMethodPopupV2> popup);
+    CInputPopup(SP<CInputMethodPopupV2> popup, CInputMethodRelay* relay);
 
     void damageEntire();
     void damageSurface();
@@ -33,6 +34,7 @@ class CInputPopup {
     void                          onMap();
     void                          onUnmap();
 
+    CInputMethodRelay*            m_relay = nullptr;
     WP<CInputMethodPopupV2>       m_popup;
     SP<Desktop::View::CWLSurface> m_surface;
     CBox                          m_lastBoxLocal;

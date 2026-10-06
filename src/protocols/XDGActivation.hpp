@@ -5,6 +5,8 @@
 #include "WaylandProtocol.hpp"
 #include "xdg-activation-v1.hpp"
 
+class CWLSeatResource;
+
 class CXDGActivationToken {
   public:
     CXDGActivationToken(SP<CXdgActivationTokenV1> resource_);
@@ -14,6 +16,7 @@ class CXDGActivationToken {
 
   private:
     SP<CXdgActivationTokenV1> m_resource;
+    SP<CWLSeatResource>       m_seat;
 
     uint32_t                  m_serial    = 0;
     std::string               m_appID     = "";
@@ -37,6 +40,7 @@ class CXDGActivationProtocol : public IWaylandProtocol {
 
     struct SSentToken {
         std::string token;
+        std::string seatSocket;
         wl_client*  client = nullptr; // READ-ONLY: can be dead
     };
     std::vector<SSentToken> m_sentTokens;

@@ -475,3 +475,7 @@ void IKeyboard::setShareStatesAuto(bool shareStates) {
     if (m_shareStatesAuto)
         m_shareStates = shareStates;
 }
+
+const std::vector<uint32_t>& IKeyboard::pressedKeys() const {
+    return m_pressed;
+}

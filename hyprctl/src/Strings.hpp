@@ -46,6 +46,7 @@ commands:
                           or issue a Lua string and print the result
     rollinglog          → Prints tail of the log. Also supports -f/--follow
                           option
+    seat ...            → List, create, remove or navigate a secondary desktop seat
     setcursor <theme> <size> → Sets the cursor theme and reloads the cursor
                           manager
     seterror <color> <message...> → Sets the hyprctl error string. Color has

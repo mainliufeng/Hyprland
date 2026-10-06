@@ -1,3 +1,6 @@
+#include "../../managers/SessionLockManager.hpp"
+#include "../../workspace/RegularWorkspace.hpp"
+#include "../../managers/SeatDesktop.hpp"
 #include "LayerSurface.hpp"
 #include "../state/FocusState.hpp"
 #include "../state/FadingOutState.hpp"
@@ -5,6 +8,7 @@
 #include "../state/LayerFadeout.hpp"
 #include "../../Compositor.hpp"
 #include "../../protocols/LayerShell.hpp"
+#include "../../protocols/PointerConstraints.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../managers/SeatManager.hpp"
 #include "../../animation/AnimationManager.hpp"
@@ -28,6 +32,10 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
 
     auto  pMonitor = resource->m_monitor.empty() ? Desktop::focusState()->monitor() : State::monitorState()->query().name(resource->m_monitor).run();
 
+    if (g_pSeatDesktopRegistry) {
+        if (const auto seat = g_pSeatDesktopRegistry->forClient(resource->m_surface->client()))
+            pMonitor = seat->monitor();
+    }
     pLS->m_wlSurface->assign(resource->m_surface.lock(), pLS);
 
     pLS->m_ruleApplicator = makeUnique<Desktop::Rule::CLayerRuleApplicator>(pLS);
@@ -197,24 +205,31 @@ void CLayerSurface::onMap() {
 
     const bool KEYBOARD_EXCLUSIVE = m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
 
-    if (KEYBOARD_EXCLUSIVE)
+    if (KEYBOARD_EXCLUSIVE && !seatDesktop())
         g_pInputManager->m_exclusiveKeyboardLSes.push_back(m_self);
 
+    const auto seat           = seatDesktop();
+    const auto focusedSurface = seat ? CWLSurface::fromResource(seat->manager()->m_state.pointerFocus.lock()) : nullptr;
+    const auto constraint     = focusedSurface ? focusedSurface->constraint(seat->manager()) : nullptr;
+    const bool constrained    = seat ? constraint && constraint->isActive() : !g_pSeatManager->m_mouse.expired() && g_pInputManager->isConstrained();
     const bool GRABS_KEYBOARD = KEYBOARD_EXCLUSIVE ||
         (m_layerSurface->m_current.keyboardInteractivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
          // don't focus if constrained
-         (g_pSeatManager->m_mouse.expired() || !g_pInputManager->isConstrained()));
+         !constrained);
 
     if (GRABS_KEYBOARD) {
         // TODO: use the new superb really very cool grab
-        if (g_pSeatManager->m_seatGrab && !g_pSeatManager->m_seatGrab->accepts(m_wlSurface->resource()))
+        if (!seatDesktop() && g_pSeatManager->m_seatGrab && !g_pSeatManager->m_seatGrab->accepts(m_wlSurface->resource()))
             g_pSeatManager->setGrab(nullptr);
 
         takeKeyboardFocus();
     }
 
     // update pointer focus
-    g_pInputManager->simulateMouseMovement();
+    if (const auto seat = seatDesktop())
+        seat->refocus();
+    else
+        g_pInputManager->simulateMouseMovement();
 
     m_position = Vector2D(m_geometry.x, m_geometry.y);
 
@@ -276,15 +291,20 @@ void CLayerSurface::onUnmap() {
     if (!PMONITOR)
         return;
 
-    // refocus if needed
-    //                                vvvvvvvvvvvvv if there is a last focus and the last focus is not keyboard focusable, fallback to window
-    if (WASLASTFOCUS ||
-        (Desktop::focusState()->surface() && Desktop::focusState()->surface()->m_hlSurface && !Desktop::focusState()->surface()->m_hlSurface->keyboardFocusable())) {
-        if (!g_pInputManager->refocusLastWindow(PMONITOR))
-            g_pInputManager->refocus();
-    } else if (Desktop::focusState()->surface() && Desktop::focusState()->surface() != m_wlSurface->resource())
-        g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
-
+    if (const auto seat = seatDesktop()) {
+        if (seat->manager()->m_state.keyboardFocus == m_wlSurface->resource())
+            seat->focusWindow(PMONITOR->m_activeWorkspace->getFocusCandidate());
+        seat->refocus();
+    } else {
+        // refocus if needed
+        //                                vvvvvvvvvvvvv if there is a last focus and the last focus is not keyboard focusable, fallback to window
+        if (WASLASTFOCUS ||
+            (Desktop::focusState()->surface() && Desktop::focusState()->surface()->m_hlSurface && !Desktop::focusState()->surface()->m_hlSurface->keyboardFocusable())) {
+            if (!g_pInputManager->refocusLastWindow(PMONITOR))
+                g_pInputManager->refocus();
+        } else if (Desktop::focusState()->surface() && Desktop::focusState()->surface() != m_wlSurface->resource())
+            g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
+    }
     CBox geomFixed = {m_geometry.x + PMONITOR->m_position.x, m_geometry.y + PMONITOR->m_position.y, m_geometry.width, m_geometry.height};
     g_pHyprRenderer->damageBox(geomFixed);
 
@@ -292,7 +312,10 @@ void CLayerSurface::onUnmap() {
                  sc<int>(m_layerSurface->m_surface->m_current.size.y)};
     g_pHyprRenderer->damageBox(geomFixed);
 
-    g_pInputManager->simulateMouseMovement();
+    if (const auto seat = seatDesktop())
+        seat->refocus();
+    else
+        g_pInputManager->simulateMouseMovement();
 
     g_pHyprRenderer->arrangeLayersForMonitor(PMONITOR->m_id);
 }
@@ -347,8 +370,13 @@ void CLayerSurface::onCommit() {
             if (m_layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND || m_layer == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM)
                 PMONITOR->m_blurFBDirty = true; // so that blur is recalc'd
 
-            if (g_pSeatManager->m_state.pointerFocus == m_wlSurface->resource())
-                g_pInputManager->simulateMouseMovement();
+            const auto seat = seatDesktop();
+            if ((seat ? seat->manager() : g_pSeatManager.get())->m_state.pointerFocus == m_wlSurface->resource()) {
+                if (seat)
+                    seat->refocus();
+                else
+                    g_pInputManager->simulateMouseMovement();
+            }
         }
 
         g_pHyprRenderer->arrangeLayersForMonitor(PMONITOR->m_id);
@@ -380,7 +408,7 @@ void CLayerSurface::onCommit() {
             m_realSize->setValueAndWarp(m_geometry.size());
     }
 
-    if (m_mapped && (m_layerSurface->m_current.committed & CLayerShellResource::eCommittedState::STATE_KEYBOARD_INTERACTIVITY)) {
+    if (!seatDesktop() && m_mapped && (m_layerSurface->m_current.committed & CLayerShellResource::eCommittedState::STATE_KEYBOARD_INTERACTIVITY)) {
         bool WASLASTFOCUS = false;
         m_layerSurface->m_surface->breadthfirst(
             [&WASLASTFOCUS](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) { WASLASTFOCUS = WASLASTFOCUS || g_pSeatManager->m_state.keyboardFocus == surf; },
@@ -407,15 +435,28 @@ void CLayerSurface::onCommit() {
             Desktop::focusState()->rawSurfaceFocus(nullptr);
             g_pInputManager->refocusLastWindow(m_monitor.lock());
         } else if (WASLASTFOCUS && WAS_KEYBOARD_EXCLUSIVE && m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND) {
-            g_pInputManager->simulateMouseMovement();
+            if (const auto seat = seatDesktop())
+                seat->refocus();
+            else
+                g_pInputManager->simulateMouseMovement();
         } else if (!WAS_KEYBOARD_EXCLUSIVE && KEYBOARD_EXCLUSIVE) {
             // if now exclusive and not previously
             g_pSeatManager->setGrab(nullptr);
             takeKeyboardFocus();
-            g_pInputManager->simulateMouseMovement();
+            if (const auto seat = seatDesktop())
+                seat->refocus();
+            else
+                g_pInputManager->simulateMouseMovement();
         }
     }
 
+    if (const auto seat = seatDesktop(); seat && m_mapped && (m_layerSurface->m_current.committed & CLayerShellResource::eCommittedState::STATE_KEYBOARD_INTERACTIVITY)) {
+        if (m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)
+            takeKeyboardFocus();
+        else if (m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
+                 seat->manager()->m_state.keyboardFocus == m_wlSurface->resource())
+            seat->focusWindow(m_monitor->m_activeWorkspace->getFocusCandidate());
+    }
     m_keyboardInteractivity = m_layerSurface->m_current.keyboardInteractivity;
 
     g_pHyprRenderer->damageSurface(m_wlSurface->resource(), m_position.x, m_position.y);
@@ -424,6 +465,14 @@ void CLayerSurface::onCommit() {
 }
 
 void CLayerSurface::takeKeyboardFocus() {
+    if (const auto seat = seatDesktop()) {
+        if (!seat->inputAllowed())
+            return;
+        seat->manager()->setGrab(nullptr);
+        seat->manager()->setKeyboardFocus(m_wlSurface->resource());
+        seat->manager()->setPointerFocus(nullptr, {});
+        return;
+    }
     g_pInputManager->releaseAllMouseButtons();
     Desktop::focusState()->rawSurfaceFocus(m_wlSurface->resource());
 
@@ -510,4 +559,8 @@ bool CLayerSurface::shouldBlur() const {
 
 bool CLayerSurface::cantLockCursor() const {
     return false;
+}
+
+CSeatDesktop* CLayerSurface::seatDesktop() const {
+    return g_pSeatDesktopRegistry && m_wlSurface && m_wlSurface->resource() ? g_pSeatDesktopRegistry->forClient(m_wlSurface->resource()->client()) : nullptr;
 }

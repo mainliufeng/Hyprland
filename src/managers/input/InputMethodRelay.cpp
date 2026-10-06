@@ -1,3 +1,5 @@
+#include "../SeatManager.hpp"
+#include "../SeatDesktop.hpp"
 #include "InputMethodRelay.hpp"
 #include "../../desktop/state/FocusState.hpp"
 #include "../../event/EventBus.hpp"
@@ -6,8 +8,11 @@
 #include "../../protocols/InputMethodV2.hpp"
 #include "../../protocols/core/Compositor.hpp"
 
-CInputMethodRelay::CInputMethodRelay() {
-    static auto P = Event::bus()->m_events.input.keyboard.focus.listen([&](SP<CWLSurfaceResource> surf) { onKeyboardFocus(surf); });
+CInputMethodRelay::CInputMethodRelay(CSeatManager* owner) : m_seat(owner) {
+    if (owner)
+        m_listeners.focus = owner->m_events.keyboardFocusChange.listen([this] { onKeyboardFocus(focus()); });
+    else
+        m_listeners.focus = Event::bus()->m_events.input.keyboard.focus.listen([this](SP<CWLSurfaceResource> surf) { onKeyboardFocus(surf); });
 
     m_listeners.newTIV3 = PROTO::textInputV3->m_events.newTextInput.listen([this](const auto& input) { onNewTextInput(input); });
     m_listeners.newTIV1 = PROTO::textInputV1->m_events.newTextInput.listen([this](const auto& input) { onNewTextInput(input); });
@@ -15,6 +20,8 @@ CInputMethodRelay::CInputMethodRelay() {
 }
 
 void CInputMethodRelay::onNewIME(SP<CInputMethodV2> pIME) {
+    if (pIME->manager() != seat())
+        return;
     if (!m_inputMethod.expired()) {
         LOG(Log::ERR, "Cannot register 2 IMEs at once!");
 
@@ -48,21 +55,21 @@ void CInputMethodRelay::onNewIME(SP<CInputMethodV2> pIME) {
     });
 
     m_listeners.newPopup = pIME->m_events.newPopup.listen([this](const SP<CInputMethodPopupV2>& popup) {
-        m_inputMethodPopups.emplace_back(makeUnique<CInputPopup>(popup));
+        m_inputMethodPopups.emplace_back(makeUnique<CInputPopup>(popup, this));
         LOG(Log::DEBUG, "New input popup");
     });
 
-    if (!Desktop::focusState()->surface())
+    if (!focus())
         return;
 
     for (auto const& ti : m_textInputs) {
-        if (ti->client() != Desktop::focusState()->surface()->client())
+        if (ti->client() != focus()->client())
             continue;
 
         if (ti->isV3())
-            ti->enter(Desktop::focusState()->surface());
+            ti->enter(focus());
         else
-            ti->onEnabled(Desktop::focusState()->surface());
+            ti->onEnabled(focus());
     }
 }
 
@@ -71,16 +78,16 @@ void CInputMethodRelay::removePopup(CInputPopup* pPopup) {
 }
 
 CTextInput* CInputMethodRelay::getFocusedTextInput() {
-    if (!Desktop::focusState()->surface())
+    if (!focus())
         return nullptr;
 
     for (auto const& ti : m_textInputs) {
-        if (ti->focusedSurface() == Desktop::focusState()->surface() && ti->isEnabled())
+        if (ti->focusedSurface() == focus() && ti->isEnabled())
             return ti.get();
     }
 
     for (auto const& ti : m_textInputs) {
-        if (ti->focusedSurface() == Desktop::focusState()->surface())
+        if (ti->focusedSurface() == focus())
             return ti.get();
     }
 
@@ -88,11 +95,16 @@ CTextInput* CInputMethodRelay::getFocusedTextInput() {
 }
 
 void CInputMethodRelay::onNewTextInput(WP<CTextInputV3> tiv3) {
-    m_textInputs.emplace_back(makeUnique<CTextInput>(tiv3));
+    if (!tiv3 || tiv3->manager() != seat())
+        return;
+    m_textInputs.emplace_back(makeUnique<CTextInput>(tiv3, this));
 }
 
 void CInputMethodRelay::onNewTextInput(WP<CTextInputV1> pTIV1) {
-    m_textInputs.emplace_back(makeUnique<CTextInput>(pTIV1));
+    const auto desktop = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forClient(pTIV1->client()) : nullptr;
+    if ((desktop ? desktop->manager() : g_pSeatManager.get()) != seat())
+        return;
+    m_textInputs.emplace_back(makeUnique<CTextInput>(pTIV1, this));
 }
 
 void CInputMethodRelay::removeTextInput(CTextInput* pInput) {
@@ -176,4 +188,14 @@ CInputPopup* CInputMethodRelay::popupFromSurface(const SP<CWLSurfaceResource> su
     }
 
     return nullptr;
+}
+
+CSeatManager* CInputMethodRelay::seat() const {
+    return m_seat ? m_seat : g_pSeatManager.get();
+}
+SP<CWLSurfaceResource> CInputMethodRelay::focus() const {
+    return seat() ? seat()->m_state.keyboardFocus.lock() : nullptr;
+}
+const std::vector<UP<CInputPopup>>& CInputMethodRelay::popups() const {
+    return m_inputMethodPopups;
 }

@@ -1,3 +1,4 @@
+#include "core/Seat.hpp"
 #include "ExtDataDevice.hpp"
 #include <algorithm>
 #include "../managers/SeatManager.hpp"
@@ -101,7 +102,7 @@ void CExtDataSource::error(uint32_t code, const std::string& msg) {
     m_resource->error(code, msg);
 }
 
-CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_) : m_resource(resource_) {
+CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -110,11 +111,11 @@ CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_) : m_resour
     m_resource->setDestroy([this](CExtDataControlDeviceV1* r) { PROTO::extDataDevice->destroyResource(this); });
     m_resource->setOnDestroy([this](CExtDataControlDeviceV1* r) { PROTO::extDataDevice->destroyResource(this); });
 
-    m_resource->setSetSelection([](CExtDataControlDeviceV1* r, wl_resource* sourceR) {
+    m_resource->setSetSelection([this](CExtDataControlDeviceV1* r, wl_resource* sourceR) {
         auto source = sourceR ? CExtDataSource::fromResource(sourceR) : CSharedPointer<CExtDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "ext reset selection received");
-            g_pSeatManager->setCurrentSelection(nullptr);
+            manager()->setCurrentSelection(nullptr);
             return;
         }
 
@@ -124,14 +125,14 @@ CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_) : m_resour
         source->markUsed();
 
         LOG(Log::DEBUG, "ext manager requests selection to {:x}", (uintptr_t)source.get());
-        g_pSeatManager->setCurrentSelection(source);
+        manager()->setCurrentSelection(source);
     });
 
-    m_resource->setSetPrimarySelection([](CExtDataControlDeviceV1* r, wl_resource* sourceR) {
+    m_resource->setSetPrimarySelection([this](CExtDataControlDeviceV1* r, wl_resource* sourceR) {
         auto source = sourceR ? CExtDataSource::fromResource(sourceR) : CSharedPointer<CExtDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "ext reset primary selection received");
-            g_pSeatManager->setCurrentPrimarySelection(nullptr);
+            manager()->setCurrentPrimarySelection(nullptr);
             return;
         }
 
@@ -141,7 +142,7 @@ CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_) : m_resour
         source->markUsed();
 
         LOG(Log::DEBUG, "ext manager requests primary selection to {:x}", (uintptr_t)source.get());
-        g_pSeatManager->setCurrentPrimarySelection(source);
+        manager()->setCurrentPrimarySelection(source);
     });
 }
 
@@ -154,8 +155,8 @@ wl_client* CExtDataDevice::client() {
 }
 
 void CExtDataDevice::sendInitialSelections() {
-    PROTO::extDataDevice->sendSelectionToDevice(self.lock(), g_pSeatManager->m_selection.currentSelection.lock(), false);
-    PROTO::extDataDevice->sendSelectionToDevice(self.lock(), g_pSeatManager->m_selection.currentPrimarySelection.lock(), true);
+    PROTO::extDataDevice->sendSelectionToDevice(self.lock(), manager()->m_selection.currentSelection.lock(), false);
+    PROTO::extDataDevice->sendSelectionToDevice(self.lock(), manager()->m_selection.currentPrimarySelection.lock(), true);
 }
 
 void CExtDataDevice::sendDataOffer(SP<CExtDataOffer> offer) {
@@ -178,7 +179,8 @@ CExtDataControlManagerResource::CExtDataControlManagerResource(SP<CExtDataContro
     m_resource->setOnDestroy([this](CExtDataControlManagerV1* r) { PROTO::extDataDevice->destroyResource(this); });
 
     m_resource->setGetDataDevice([this](CExtDataControlManagerV1* r, uint32_t id, wl_resource* seat) {
-        const auto RESOURCE = PROTO::extDataDevice->m_devices.emplace_back(makeShared<CExtDataDevice>(makeShared<CExtDataControlDeviceV1>(r->client(), r->version(), id)));
+        const auto RESOURCE = PROTO::extDataDevice->m_devices.emplace_back(
+            makeShared<CExtDataDevice>(makeShared<CExtDataControlDeviceV1>(r->client(), r->version(), id), CWLSeatResource::fromResource(seat)));
 
         if UNLIKELY (!RESOURCE->good()) {
             r->noMemory();
@@ -277,6 +279,7 @@ void CExtDataDeviceProtocol::sendSelectionToDevice(SP<CExtDataDevice> dev, SP<ID
     }
 
     OFFER->m_primary = primary;
+    OFFER->m_seat    = dev->manager();
 
     LOG(Log::DEBUG, "New {}offer {:x} for data source {:x}", primary ? "primary " : " ", (uintptr_t)OFFER.get(), (uintptr_t)sel.get());
 
@@ -288,8 +291,11 @@ void CExtDataDeviceProtocol::sendSelectionToDevice(SP<CExtDataDevice> dev, SP<ID
         dev->sendSelection(OFFER);
 }
 
-void CExtDataDeviceProtocol::setSelection(SP<IDataSource> source, bool primary) {
+void CExtDataDeviceProtocol::setSelection(SP<IDataSource> source, bool primary, CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         if (o->m_source && o->m_source->hasDnd())
             continue;
         if (o->m_primary != primary)
@@ -301,6 +307,8 @@ void CExtDataDeviceProtocol::setSelection(SP<IDataSource> source, bool primary) 
         LOG(Log::DEBUG, "resetting {}selection", primary ? "primary " : " ");
 
         for (auto const& d : m_devices) {
+            if (d->manager() != seat)
+                continue;
             sendSelectionToDevice(d, nullptr, primary);
         }
 
@@ -310,6 +318,8 @@ void CExtDataDeviceProtocol::setSelection(SP<IDataSource> source, bool primary) 
     LOG(Log::DEBUG, "New {}selection for data source {:x}", primary ? "primary" : "", (uintptr_t)source.get());
 
     for (auto const& d : m_devices) {
+        if (d->manager() != seat)
+            continue;
         sendSelectionToDevice(d, source, primary);
     }
 }
@@ -319,4 +329,8 @@ SP<CExtDataDevice> CExtDataDeviceProtocol::dataDeviceForClient(wl_client* c) {
     if (it == m_devices.end())
         return nullptr;
     return *it;
+}
+
+CSeatManager* CExtDataDevice::manager() const {
+    return m_seat->manager();
 }

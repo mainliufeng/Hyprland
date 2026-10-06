@@ -1,3 +1,4 @@
+#include "../SeatDesktop.hpp"
 #include "InputManager.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
 #include "../../Compositor.hpp"
@@ -64,8 +65,12 @@
 
 using namespace Hyprutils::String;
 
+STouchData::SWorkspaceSwipe::SWorkspaceSwipe() = default;
+
 CInputManager::CInputManager() {
     m_listeners.setCursorShape = PROTO::cursorShape->m_events.setShape.listen([this](const CCursorShapeProtocol::SSetShapeEvent& event) {
+        if (event.seat && event.seat != g_pSeatManager.get())
+            return;
         if (!g_pSeatManager->m_state.pointerFocusResource)
             return;
 
@@ -88,11 +93,21 @@ CInputManager::CInputManager() {
     m_listeners.newIdleInhibitor = PROTO::idleInhibit->m_events.newIdleInhibitor.listen([this](const auto& data) { newIdleInhibitor(data); });
 
     m_listeners.newVirtualKeyboard = PROTO::virtualKeyboard->m_events.newKeyboard.listen([this](const auto& keyboard) {
+        if (keyboard->manager() != g_pSeatManager.get()) {
+            if (auto desktop = g_pSeatDesktopRegistry->forManager(keyboard->manager()))
+                desktop->attachKeyboard(CVirtualKeyboard::create(keyboard));
+            return;
+        }
         newVirtualKeyboard(keyboard);
         updateCapabilities();
     });
 
     m_listeners.newVirtualMouse = PROTO::virtualPointer->m_events.newPointer.listen([this](const auto& mouse) {
+        if (mouse->manager() != g_pSeatManager.get()) {
+            if (auto desktop = g_pSeatDesktopRegistry->forManager(mouse->manager()))
+                desktop->attachPointer(CVirtualPointer::create(mouse));
+            return;
+        }
         newVirtualMouse(mouse);
         updateCapabilities();
     });

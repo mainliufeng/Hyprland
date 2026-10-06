@@ -61,6 +61,7 @@ struct STouchData {
     };
 
     struct SWorkspaceSwipe {
+        SWorkspaceSwipe();
         WP<ITouch>          device;
         int32_t             id        = 0;
         uint64_t            sessionID = 0;
@@ -330,6 +331,7 @@ class CInputManager {
     std::vector<uint32_t> m_pressed;
     Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
 
+    friend class CSeatDesktop;
     friend class Desktop::View::CWLSurface;
     friend class CWorkspaceSwipeGesture;
 };

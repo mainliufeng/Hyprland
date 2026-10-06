@@ -1,3 +1,7 @@
+#include "core/Seat.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SessionLockManager.hpp"
+#include "../pointer/PointerManager.hpp"
 #include "PointerConstraints.hpp"
 #include "../desktop/view/WLSurface.hpp"
 #include "../desktop/state/FocusState.hpp"
@@ -8,8 +12,8 @@
 #include "../render/Renderer.hpp"
 #include "../output/Monitor.hpp"
 
-CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_) :
-    m_resourceLocked(resource_), m_locked(true), m_lifetime(lifetime_) {
+CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_,
+                                       SP<CWLPointerResource> pointer) : m_resourceLocked(resource_), m_pointer(pointer), m_locked(true), m_lifetime(lifetime_) {
     if UNLIKELY (!resource_->resource())
         return;
 
@@ -36,14 +40,17 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
         if (PWINDOW && PWINDOW->backend().isX11())
             m_positionHint = PWINDOW->backend().bufferToSurfaceLocal(m_positionHint);
 
-        g_pInputManager->simulateMouseMovement();
+        if (manager()->m_desktop)
+            manager()->m_desktop->refocus();
+        else
+            g_pInputManager->simulateMouseMovement();
     });
 
     sharedConstructions();
 }
 
-CPointerConstraint::CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_) :
-    m_resourceConfined(resource_), m_lifetime(lifetime_) {
+CPointerConstraint::CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_,
+                                       SP<CWLPointerResource> pointer) : m_resourceConfined(resource_), m_pointer(pointer), m_lifetime(lifetime_) {
     if UNLIKELY (!resource_->resource())
         return;
 
@@ -70,7 +77,7 @@ CPointerConstraint::~CPointerConstraint() {
     });
 
     if (m_hlSurface)
-        m_hlSurface->m_constraint.reset();
+        std::erase_if(m_hlSurface->m_constraints, [this](const auto& entry) { return !entry || entry.get() == this; });
 }
 
 void CPointerConstraint::sharedConstructions() {
@@ -87,7 +94,7 @@ void CPointerConstraint::sharedConstructions() {
         });
     }
 
-    m_cursorPosOnActivate = g_pInputManager->getMouseCoordsInternal();
+    m_cursorPosOnActivate = manager()->m_desktop ? manager()->m_desktop->pointer()->position() : g_pInputManager->getMouseCoordsInternal();
 }
 
 bool CPointerConstraint::good() {
@@ -116,15 +123,15 @@ void CPointerConstraint::deactivate() {
 }
 
 void CPointerConstraint::activate() {
-    if (m_dead || m_active)
+    if (m_dead || m_active || !m_hlSurface || g_pSessionLockManager->isSessionLocked() || (manager()->m_desktop && !manager()->m_desktop->active()))
         return;
 
     // TODO: hack, probably not a super duper great idea
-    if (g_pSeatManager->m_state.pointerFocus != m_hlSurface->resource()) {
+    if (manager()->m_state.pointerFocus != m_hlSurface->resource()) {
         if (const auto VIEW = m_hlSurface->view(); !VIEW || !VIEW->cantLockCursor()) {
             const auto SURFBOX = m_hlSurface->getSurfaceBoxGlobal();
             const auto LOCAL   = SURFBOX.has_value() ? logicPositionHint() - SURFBOX->pos() : Vector2D{};
-            g_pSeatManager->setPointerFocus(m_hlSurface->resource(), LOCAL);
+            manager()->setPointerFocus(m_hlSurface->resource(), LOCAL);
         }
     }
 
@@ -135,7 +142,10 @@ void CPointerConstraint::activate() {
 
     m_active = true;
 
-    g_pInputManager->simulateMouseMovement();
+    if (manager()->m_desktop)
+        manager()->m_desktop->refocus();
+    else
+        g_pInputManager->simulateMouseMovement();
 }
 
 bool CPointerConstraint::isActive() {
@@ -152,7 +162,10 @@ void CPointerConstraint::onSetRegion(wl_resource* wlRegion) {
 
     m_region.set(REGION);
     m_positionHint = m_region.closestPoint(m_positionHint);
-    g_pInputManager->simulateMouseMovement(); // to warp the cursor if anything's amiss
+    if (manager()->m_desktop)
+        manager()->m_desktop->refocus();
+    else
+        g_pInputManager->simulateMouseMovement(); // to warp the cursor if anything's amiss
 }
 
 SP<Desktop::View::CWLSurface> CPointerConstraint::owner() {
@@ -226,7 +239,7 @@ void CPointerConstraintsProtocol::onNewConstraint(SP<CPointerConstraint> constra
 
     const auto OWNER = constraint->owner();
 
-    const auto DUPES = std::ranges::count_if(m_constraints, [OWNER](const auto& c) { return c->owner() == OWNER; });
+    const auto DUPES = std::ranges::count_if(m_constraints, [OWNER, constraint](const auto& c) { return c->owner() == OWNER && c->manager() == constraint->manager(); });
 
     if UNLIKELY (DUPES > 1) {
         LOG(Log::ERR, "Constraint for surface duped");
@@ -237,17 +250,18 @@ void CPointerConstraintsProtocol::onNewConstraint(SP<CPointerConstraint> constra
 
     OWNER->appendConstraint(constraint);
 
-    g_pInputManager->m_constraints.emplace_back(constraint);
+    if (!constraint->manager()->m_desktop)
+        g_pInputManager->m_constraints.emplace_back(constraint);
 
-    if (g_pSeatManager->m_state.pointerFocus == OWNER->resource())
+    if (constraint->manager()->m_state.pointerFocus == OWNER->resource())
         constraint->activate();
 }
 
 void CPointerConstraintsProtocol::onLockPointer(CZwpPointerConstraintsV1* pMgr, uint32_t id, wl_resource* surface, wl_resource* pointer, wl_resource* region,
                                                 zwpPointerConstraintsV1Lifetime lifetime) {
     const auto CLIENT   = pMgr->client();
-    const auto RESOURCE = m_constraints.emplace_back(
-        makeShared<CPointerConstraint>(makeShared<CZwpLockedPointerV1>(CLIENT, pMgr->version(), id), CWLSurfaceResource::fromResource(surface), region, lifetime));
+    const auto RESOURCE = m_constraints.emplace_back(makeShared<CPointerConstraint>(
+        makeShared<CZwpLockedPointerV1>(CLIENT, pMgr->version(), id), CWLSurfaceResource::fromResource(surface), region, lifetime, CWLPointerResource::fromResource(pointer)));
 
     onNewConstraint(RESOURCE, pMgr);
 }
@@ -255,8 +269,12 @@ void CPointerConstraintsProtocol::onLockPointer(CZwpPointerConstraintsV1* pMgr, 
 void CPointerConstraintsProtocol::onConfinePointer(CZwpPointerConstraintsV1* pMgr, uint32_t id, wl_resource* surface, wl_resource* pointer, wl_resource* region,
                                                    zwpPointerConstraintsV1Lifetime lifetime) {
     const auto CLIENT   = pMgr->client();
-    const auto RESOURCE = m_constraints.emplace_back(
-        makeShared<CPointerConstraint>(makeShared<CZwpConfinedPointerV1>(CLIENT, pMgr->version(), id), CWLSurfaceResource::fromResource(surface), region, lifetime));
+    const auto RESOURCE = m_constraints.emplace_back(makeShared<CPointerConstraint>(
+        makeShared<CZwpConfinedPointerV1>(CLIENT, pMgr->version(), id), CWLSurfaceResource::fromResource(surface), region, lifetime, CWLPointerResource::fromResource(pointer)));
 
     onNewConstraint(RESOURCE, pMgr);
+}
+
+CSeatManager* CPointerConstraint::manager() const {
+    return m_pointer->m_owner->manager();
 }

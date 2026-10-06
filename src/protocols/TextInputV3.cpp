@@ -1,3 +1,4 @@
+#include "core/Seat.hpp"
 #include "TextInputV3.hpp"
 #include <algorithm>
 #include "core/Compositor.hpp"
@@ -9,7 +10,7 @@ void CTextInputV3::SState::reset() {
     box.updated         = false;
 }
 
-CTextInputV3::CTextInputV3(SP<CZwpTextInputV3> resource_) : m_resource(resource_) {
+CTextInputV3::CTextInputV3(SP<CZwpTextInputV3> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!m_resource->resource())
         return;
 
@@ -127,7 +128,7 @@ void CTextInputV3Protocol::destroyTextInput(CTextInputV3* input) {
 
 void CTextInputV3Protocol::onGetTextInput(CZwpTextInputManagerV3* pMgr, uint32_t id, wl_resource* seat) {
     const auto CLIENT   = pMgr->client();
-    const auto RESOURCE = m_textInputs.emplace_back(makeShared<CTextInputV3>(makeShared<CZwpTextInputV3>(CLIENT, pMgr->version(), id)));
+    const auto RESOURCE = m_textInputs.emplace_back(makeShared<CTextInputV3>(makeShared<CZwpTextInputV3>(CLIENT, pMgr->version(), id), CWLSeatResource::fromResource(seat)));
 
     if UNLIKELY (!RESOURCE->good()) {
         pMgr->noMemory();
@@ -137,4 +138,7 @@ void CTextInputV3Protocol::onGetTextInput(CZwpTextInputManagerV3* pMgr, uint32_t
     }
 
     m_events.newTextInput.emit(WP<CTextInputV3>(RESOURCE));
+}
+CSeatManager* CTextInputV3::manager() const {
+    return m_seat->manager();
 }

@@ -15,6 +15,7 @@
 #include "animationControllers/LayerSurfaceAnimationController.hpp"
 
 class CLayerShellResource;
+class CSeatDesktop;
 
 namespace Desktop::View {
 
@@ -90,7 +91,8 @@ namespace Desktop::View {
         MONITORID                               monitorID();
 
       private:
-        bool m_mapped = false;
+        CSeatDesktop* seatDesktop() const;
+        bool          m_mapped = false;
 
         struct {
             CHyprSignalListener destroy;

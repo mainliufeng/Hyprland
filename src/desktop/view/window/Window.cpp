@@ -1,3 +1,4 @@
+#include "../../../managers/SeatDesktop.hpp"
 #include <algorithm>
 #include <cmath>
 #include <ranges>
@@ -1153,8 +1154,13 @@ void CWindow::mapWindow() {
     static auto PINITIALWSTRACKING = CConfigValue<Config::INTEGER>("misc:initial_workspace_tracking");
     static auto PAUTOGROUP         = CConfigValue<Config::INTEGER>("group:auto_group");
 
-    auto        PMONITOR = Desktop::focusState()->monitor();
-    if (!Desktop::focusState()->monitor()) {
+    const auto  SEAT = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+    if (SEAT && !SEAT->active()) {
+        backend().close();
+        return;
+    }
+    auto PMONITOR = SEAT ? SEAT->monitor() : Desktop::focusState()->monitor();
+    if (!SEAT && !Desktop::focusState()->monitor()) {
         Desktop::focusState()->rawMonitorFocus(State::monitorState()->query().vec({}).run());
         PMONITOR = Desktop::focusState()->monitor();
     }
@@ -1211,7 +1217,7 @@ void CWindow::mapWindow() {
         }
     }
 
-    if (g_pInputManager->m_lastFocusOnLS) // waybar fix
+    if (!SEAT && g_pInputManager->m_lastFocusOnLS) // waybar fix
         g_pInputManager->releaseAllMouseButtons();
 
     // registers the animated vars and stuff
@@ -1237,7 +1243,7 @@ void CWindow::mapWindow() {
         SFullscreenRequestSuppression fullscreenSuppression;
         m_requestSuppression = {};
 
-        if (!m_ruleApplicator->static_.monitor.empty()) {
+        if (!SEAT && !m_ruleApplicator->static_.monitor.empty()) {
             const auto& MONITORSTR = m_ruleApplicator->static_.monitor;
             if (MONITORSTR == "unset")
                 m_monitor = PMONITOR;
@@ -1357,7 +1363,7 @@ void CWindow::mapWindow() {
 
     CVarList2 WORKSPACEARGS = CVarList2(std::move(requestedWorkspace), 0, ' ', false, false);
 
-    if (requestedWorkspaceTarget || !WORKSPACEARGS[0].empty()) {
+    if (!SEAT && (requestedWorkspaceTarget || !WORKSPACEARGS[0].empty())) {
         State::Workspace::STarget target;
         if (WORKSPACEARGS.contains("silent"))
             workspaceSilent = true;
@@ -1405,7 +1411,7 @@ void CWindow::mapWindow() {
 
     if (m_fullscreenPolicy->requestSuppression().fullscreenOutput)
         requestedFSMonitor = MONITOR_INVALID;
-    else if (requestedFSMonitor != MONITOR_INVALID) {
+    else if (!SEAT && requestedFSMonitor != MONITOR_INVALID) {
         if (const auto PM = State::monitorState()->query().id(requestedFSMonitor).run(); PM)
             m_monitor = PM;
 
@@ -1421,6 +1427,12 @@ void CWindow::mapWindow() {
         LOG(Log::DEBUG, "Requested monitor, applying to {:mw}", m_self.lock());
     }
 
+    if (SEAT) {
+        m_monitor = SEAT->monitor();
+        if (!m_workspace || m_workspace->monitor() != SEAT->monitor())
+            m_workspace = SEAT->monitor()->m_activeWorkspace;
+        PWORKSPACE = m_workspace;
+    }
     PMONITOR = m_monitor.lock();
 
     syncInitialWorkspaceToken(m_workspace);
@@ -1850,23 +1862,27 @@ void CWindow::onActivationRequest() {
 }
 
 void CWindow::onMoveRequest() {
-    if (!m_isMapped || isHidden() || g_layoutManager->dragController()->target())
+    const auto seat = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+    const auto drag = seat ? seat->dragController() : g_layoutManager->dragController().get();
+    if (!m_isMapped || isHidden() || drag->target())
         return;
 
     if (m_ruleApplicator->noXdgDrags().valueOrDefault())
         return;
 
-    g_layoutManager->beginDragTarget(layoutTarget(), MBIND_MOVE, std::nullopt, true);
+    drag->dragBegin(layoutTarget(), MBIND_MOVE, std::nullopt, true);
 }
 
 void CWindow::onResizeRequest(eBackendResizeEdge edge) {
-    if (!m_isMapped || isHidden() || g_layoutManager->dragController()->target())
+    const auto seat = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+    const auto drag = seat ? seat->dragController() : g_layoutManager->dragController().get();
+    if (!m_isMapped || isHidden() || drag->target())
         return;
 
     if (m_ruleApplicator->noXdgDrags().valueOrDefault())
         return;
 
-    g_layoutManager->beginDragTarget(layoutTarget(), MBIND_RESIZE, backendResizeEdgeToCorner(edge), true);
+    drag->dragBegin(layoutTarget(), MBIND_RESIZE, backendResizeEdgeToCorner(edge), true);
 }
 
 void CWindow::onGeometryChanged(const CBox& box) {

@@ -1,3 +1,5 @@
+#include "core/Seat.hpp"
+#include "../managers/SeatManager.hpp"
 #include "VirtualKeyboard.hpp"
 #include <filesystem>
 #include <sys/mman.h>
@@ -31,7 +33,7 @@ static std::string virtualKeyboardNameForWlClient(wl_client* client) {
     return name;
 }
 
-CVirtualKeyboardV1Resource::CVirtualKeyboardV1Resource(SP<CZwpVirtualKeyboardV1> resource_) : m_resource(resource_) {
+CVirtualKeyboardV1Resource::CVirtualKeyboardV1Resource(SP<CZwpVirtualKeyboardV1> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -163,7 +165,12 @@ void CVirtualKeyboardProtocol::destroyResource(CVirtualKeyboardV1Resource* keeb)
 
 void CVirtualKeyboardProtocol::onCreateKeeb(CZwpVirtualKeyboardManagerV1* pMgr, wl_resource* seat, uint32_t id) {
 
-    const auto RESOURCE = m_keyboards.emplace_back(makeShared<CVirtualKeyboardV1Resource>(makeShared<CZwpVirtualKeyboardV1>(pMgr->client(), pMgr->version(), id)));
+    const auto requestedSeat = CWLSeatResource::fromResource(seat);
+    if (!requestedSeat) {
+        wl_client_post_implementation_error(pMgr->client(), "invalid virtual keyboard seat");
+        return;
+    }
+    const auto RESOURCE = m_keyboards.emplace_back(makeShared<CVirtualKeyboardV1Resource>(makeShared<CZwpVirtualKeyboardV1>(pMgr->client(), pMgr->version(), id), requestedSeat));
 
     if UNLIKELY (!RESOURCE->good()) {
         pMgr->noMemory();
@@ -174,4 +181,8 @@ void CVirtualKeyboardProtocol::onCreateKeeb(CZwpVirtualKeyboardManagerV1* pMgr, 
     LOG(Log::DEBUG, "New VKeyboard at id {}", id);
 
     m_events.newKeyboard.emit(RESOURCE);
+}
+
+CSeatManager* CVirtualKeyboardV1Resource::manager() const {
+    return m_seat ? m_seat->manager() : g_pSeatManager.get();
 }

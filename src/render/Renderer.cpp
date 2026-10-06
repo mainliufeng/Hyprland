@@ -1,3 +1,4 @@
+#include "../managers/SeatDesktop.hpp"
 #include "Renderer.hpp"
 #include "../Compositor.hpp"
 #include "../helpers/math/Math.hpp"
@@ -469,6 +470,8 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
 
     Event::bus()->m_events.render.stage.emit({RENDER_PRE_WINDOWS, pMonitor, ctx});
 
+    const auto                desktopSeat   = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forMonitor(pMonitor) : nullptr;
+    const auto                focusedWindow = desktopSeat ? desktopSeat->window() : Desktop::focusState()->window();
     std::vector<PHLWINDOWREF> windows;
     windows.reserve(Desktop::windowState()->windows().size());
 
@@ -496,7 +499,7 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
             continue;
 
         // render active window after all others of this pass
-        if (w == Desktop::focusState()->window()) {
+        if (w == focusedWindow) {
             lastWindow = w.lock();
             continue;
         }
@@ -984,6 +987,10 @@ SP<ITexture> IHyprRenderer::createTexture(const SP<Aquamarine::IBuffer> buffer, 
 void IHyprRenderer::renderLayer(CRenderContext& ctx, PHLLS pLayer, PHLMONITOR pMonitor, const Time::steady_tp& time, bool popups, bool lockscreen) {
     if (!pLayer)
         return;
+    if (pLayer->wlSurface()->resource() && g_pSeatDesktopRegistry) {
+        if (const auto seat = g_pSeatDesktopRegistry->forClient(pLayer->wlSurface()->resource()->client()); seat && !seat->active())
+            return;
+    }
 
     if (!pLayer->mapped() || !pLayer->acceptsInput() || !pLayer->alphaNonZero())
         return;
@@ -1348,6 +1355,16 @@ void IHyprRenderer::renderIME(CRenderContext& ctx, PHLMONITOR pMonitor, const Ti
     for (auto const& imep : g_pInputManager->m_relay.m_inputMethodPopups) {
         if (imep->shouldBeRendered())
             renderIMEPopup(ctx, imep.get(), pMonitor, now);
+    }
+    if (g_pSeatDesktopRegistry) {
+        for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+            if (!seat->active() || seat->monitor() != pMonitor)
+                continue;
+            for (const auto& popup : seat->relay()->popups()) {
+                if (popup->shouldBeRendered())
+                    renderIMEPopup(ctx, popup.get(), pMonitor, now);
+            }
+        }
     }
 }
 
@@ -2411,6 +2428,11 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (renderCursor) {
         TRACY_GPU_ZONE("RenderCursor");
         Pointer::mgr()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
+    }
+
+    if (g_pSeatDesktopRegistry) {
+        if (const auto seat = g_pSeatDesktopRegistry->forMonitor(pMonitor->m_self.lock()))
+            seat->pointer()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
     }
 
     if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {

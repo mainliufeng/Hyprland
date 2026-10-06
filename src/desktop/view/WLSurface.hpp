@@ -1,3 +1,4 @@
+class CSeatManager;
 #pragma once
 
 #include "../../defines.hpp"
@@ -47,7 +48,7 @@ namespace Desktop::View {
         // desktop components misc utils
         std::optional<CBox>    getSurfaceBoxGlobal() const;
         void                   appendConstraint(WP<CPointerConstraint> constraint);
-        SP<CPointerConstraint> constraint() const;
+        SP<CPointerConstraint> constraint(CSeatManager* seat = nullptr) const;
 
         // allow stretching. Useful for plugins.
         bool m_fillIgnoreSmall = false;
@@ -102,11 +103,11 @@ namespace Desktop::View {
         WP<IView>              m_view;
 
         //
-        WP<CPointerConstraint> m_constraint;
+        std::vector<WP<CPointerConstraint>> m_constraints;
 
-        void                   destroy();
-        void                   init();
-        bool                   desktopComponent() const;
+        void                                destroy();
+        void                                init();
+        bool                                desktopComponent() const;
 
         struct {
             CHyprSignalListener destroy;

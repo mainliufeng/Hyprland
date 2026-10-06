@@ -1,4 +1,5 @@
 #include "ProtocolManager.hpp"
+#include "SeatDesktop.hpp"
 
 #include "../config/ConfigValue.hpp"
 
@@ -347,6 +348,8 @@ CProtocolManager::~CProtocolManager() {
 
 bool CProtocolManager::isGlobalPrivileged(const wl_global* global) {
     if (!global)
+        return false;
+    if (g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->isSeatGlobal(global))
         return false;
 
     for (auto& [k, v] : PROTO::outputs) {

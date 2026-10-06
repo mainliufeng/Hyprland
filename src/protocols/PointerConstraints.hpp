@@ -1,7 +1,5 @@
 #pragma once
 
-#pragma once
-
 #include <vector>
 #include <cstdint>
 #include "WaylandProtocol.hpp"
@@ -11,14 +9,19 @@
 #include "../helpers/signal/Signal.hpp"
 
 class CWLSurfaceResource;
+class CWLPointerResource;
+class CSeatManager;
 
 class CPointerConstraint {
   public:
-    CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region, zwpPointerConstraintsV1Lifetime lifetime_);
-    CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region, zwpPointerConstraintsV1Lifetime lifetime_);
+    CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region, zwpPointerConstraintsV1Lifetime lifetime_,
+                       SP<CWLPointerResource> pointer);
+    CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region, zwpPointerConstraintsV1Lifetime lifetime_,
+                       SP<CWLPointerResource> pointer);
     ~CPointerConstraint();
 
     bool                          good();
+    CSeatManager*                 manager() const;
 
     void                          deactivate();
     void                          activate();
@@ -34,6 +37,7 @@ class CPointerConstraint {
     SP<CZwpLockedPointerV1>         m_resourceLocked;
     SP<CZwpConfinedPointerV1>       m_resourceConfined;
 
+    SP<CWLPointerResource>          m_pointer;
     WP<Desktop::View::CWLSurface>   m_hlSurface;
 
     CRegion                         m_region;

@@ -2,6 +2,8 @@
 #include "../managers/TokenManager.hpp"
 #include "../Compositor.hpp"
 #include "../managers/SeatManager.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "core/Seat.hpp"
 #include "core/Compositor.hpp"
 #include <algorithm>
 
@@ -12,7 +14,10 @@ CXDGActivationToken::CXDGActivationToken(SP<CXdgActivationTokenV1> resource_) : 
     m_resource->setDestroy([this](CXdgActivationTokenV1* r) { PROTO::activation->destroyToken(this); });
     m_resource->setOnDestroy([this](CXdgActivationTokenV1* r) { PROTO::activation->destroyToken(this); });
 
-    m_resource->setSetSerial([this](CXdgActivationTokenV1* r, uint32_t serial_, wl_resource* seat) { m_serial = serial_; });
+    m_resource->setSetSerial([this](CXdgActivationTokenV1* r, uint32_t serial_, wl_resource* seat) {
+        m_serial = serial_;
+        m_seat   = CWLSeatResource::fromResource(seat);
+    });
 
     m_resource->setSetAppId([this](CXdgActivationTokenV1* r, const char* appid) { m_appID = appid; });
 
@@ -32,7 +37,7 @@ CXDGActivationToken::CXDGActivationToken(SP<CXdgActivationTokenV1> resource_) : 
 
         m_committed = true;
 
-        if UNLIKELY (!m_serial || !g_pSeatManager->serialValid(g_pSeatManager->seatResourceForClient(m_resource->client()), m_serial)) {
+        if UNLIKELY (!m_serial || !m_seat || m_seat->client() != m_resource->client() || !m_seat->manager()->serialValid(m_seat, m_serial)) {
             LOG(Log::WARN, "invalid serial {} for activation token, rejecting", m_serial);
             rej();
             return;
@@ -45,7 +50,8 @@ CXDGActivationToken::CXDGActivationToken(SP<CXdgActivationTokenV1> resource_) : 
 
         m_resource->sendDone(m_token.c_str());
 
-        PROTO::activation->m_sentTokens.push_back({m_token, m_resource->client()});
+        const auto desktop = m_seat->manager()->m_desktop;
+        PROTO::activation->m_sentTokens.push_back({m_token, desktop ? desktop->socketName() : "", m_resource->client()});
 
         auto count = std::ranges::count_if(PROTO::activation->m_sentTokens, [this](const auto& other) { return other.client == m_resource->client(); });
 
@@ -87,6 +93,10 @@ void CXDGActivationProtocol::bindManager(wl_client* client, void* data, uint32_t
             LOG(Log::WARN, "activate event for non-existent token {}??", token);
             return;
         }
+
+        const auto desktop = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forClient(pMgr->client()) : nullptr;
+        if (TOKEN->seatSocket != (desktop ? desktop->socketName() : ""))
+            return;
 
         // remove token. It's been now spent.
         m_sentTokens.erase(TOKEN);

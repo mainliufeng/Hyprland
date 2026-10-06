@@ -1,3 +1,5 @@
+#include "../../managers/SeatManager.hpp"
+#include "../../protocols/PointerConstraints.hpp"
 #include "WLSurface.hpp"
 #include "LayerSurface.hpp"
 #include "window/Window.hpp"
@@ -143,7 +145,7 @@ void CWLSurface::destroy() {
 
     m_events.destroy.emit();
 
-    m_constraint.reset();
+    m_constraints.clear();
 
     m_listeners.destroy.reset();
     m_resource->m_hlSurface.reset();
@@ -187,11 +189,17 @@ std::optional<CBox> CWLSurface::getSurfaceBoxGlobal() const {
 }
 
 void CWLSurface::appendConstraint(WP<CPointerConstraint> constraint) {
-    m_constraint = constraint;
+    std::erase_if(m_constraints, [](const auto& entry) { return entry.expired(); });
+    m_constraints.emplace_back(constraint);
 }
 
-SP<CPointerConstraint> CWLSurface::constraint() const {
-    return m_constraint.lock();
+SP<CPointerConstraint> CWLSurface::constraint(CSeatManager* seat) const {
+    seat = seat ? seat : g_pSeatManager.get();
+    for (const auto& constraint : m_constraints) {
+        if (constraint && constraint->manager() == seat)
+            return constraint.lock();
+    }
+    return nullptr;
 }
 
 SP<Desktop::View::CWLSurface> CWLSurface::fromResource(SP<CWLSurfaceResource> pSurface) {

@@ -9,9 +9,12 @@
 #include "../devices/IPointer.hpp"
 #include "../output/Monitor.hpp"
 
+class CWLSeatResource;
+class CSeatManager;
+
 class CVirtualPointerV1Resource {
   public:
-    CVirtualPointerV1Resource(SP<CZwlrVirtualPointerV1> resource_, PHLMONITORREF boundOutput_);
+    CVirtualPointerV1Resource(SP<CZwlrVirtualPointerV1> resource_, PHLMONITORREF boundOutput_, SP<CWLSeatResource> seat);
     ~CVirtualPointerV1Resource();
 
     struct {
@@ -34,6 +37,8 @@ class CVirtualPointerV1Resource {
         CSignalT<IPointer::SHoldEndEvent>        holdEnd;
     } m_events;
 
+    CSeatManager* manager() const;
+
     bool          good();
     wl_client*    client();
 
@@ -42,6 +47,7 @@ class CVirtualPointerV1Resource {
     PHLMONITORREF m_boundOutput;
 
   private:
+    SP<CWLSeatResource>                 m_seat;
     SP<CZwlrVirtualPointerV1>           m_resource;
 
     uint32_t                            m_axis = 0;

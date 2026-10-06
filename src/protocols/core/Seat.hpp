@@ -21,6 +21,8 @@
 constexpr const char* HL_SEAT_NAME = "Hyprland";
 
 class IKeyboard;
+class CSeatManager;
+class CWLSeatProtocol;
 class CWLSurfaceResource;
 
 class CWLPointerResource;
@@ -58,6 +60,7 @@ class CWLTouchResource {
     WP<CWLSeatResource> m_owner;
 
   private:
+    SP<CWLSeatResource>    m_parent; // wl_seat may be released before its child resources
     SP<CWlTouch>           m_resource;
     WP<CWLSurfaceResource> m_currentSurface;
 
@@ -97,6 +100,7 @@ class CWLPointerResource {
     static SP<CWLPointerResource> fromResource(wl_resource* res);
 
   private:
+    SP<CWLSeatResource>    m_parent;
     SP<CWlPointer>         m_resource;
     WP<CWLSurfaceResource> m_currentSurface;
     WP<CWLPointerResource> m_self;
@@ -127,6 +131,7 @@ class CWLKeyboardResource {
     WP<CWLSeatResource> m_owner;
 
   private:
+    SP<CWLSeatResource>    m_parent;
     SP<CWlKeyboard>        m_resource;
     WP<CWLSurfaceResource> m_currentSurface;
 
@@ -141,7 +146,7 @@ class CWLKeyboardResource {
 
 class CWLSeatResource {
   public:
-    CWLSeatResource(SP<CWlSeat> resource_);
+    CWLSeatResource(SP<CWlSeat> resource_, CWLSeatProtocol* protocol);
     ~CWLSeatResource();
 
     static SP<CWLSeatResource>           fromResource(wl_resource*);
@@ -150,6 +155,8 @@ class CWLSeatResource {
 
     bool                                 good();
     wl_client*                           client();
+    CWLSeatProtocol*                     protocol() const;
+    CSeatManager*                        manager() const;
 
     std::vector<WP<CWLPointerResource>>  m_pointers;
     std::vector<WP<CWLKeyboardResource>> m_keyboards;
@@ -162,15 +169,18 @@ class CWLSeatResource {
     } m_events;
 
   private:
-    SP<CWlSeat> m_resource;
-    wl_client*  m_client = nullptr;
+    CWLSeatProtocol* m_protocol = nullptr;
+    SP<CWlSeat>      m_resource;
+    wl_client*       m_client = nullptr;
 };
 
 class CWLSeatProtocol : public IWaylandProtocol {
   public:
-    CWLSeatProtocol(const wl_interface* iface, const int& ver, const std::string& name);
+    CWLSeatProtocol(const wl_interface* iface, const int& ver, const std::string& name, const std::string& seatName = HL_SEAT_NAME);
 
-    virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
+    const std::string& seatName() const;
+
+    virtual void       bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
     struct {
         CSignalT<SP<CWLSeatResource>> newSeatResource;
@@ -195,7 +205,9 @@ class CWLSeatProtocol : public IWaylandProtocol {
     SP<CWLSeatResource>                  seatResourceForClient(wl_client* client);
 
     //
-    uint32_t m_currentCaps = 0;
+    uint32_t      m_currentCaps = 0;
+    CSeatManager* m_manager     = nullptr;
+    std::string   m_seatName;
 
     friend class CWLSeatResource;
     friend class CWLKeyboardResource;

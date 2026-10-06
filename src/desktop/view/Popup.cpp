@@ -1,3 +1,4 @@
+#include "../../managers/SeatDesktop.hpp"
 #include "Popup.hpp"
 #include "Subsurface.hpp"
 #include "../../config/ConfigValue.hpp"
@@ -213,7 +214,10 @@ void CPopup::onMap() {
 
     invalidateTreeExtentsCache();
 
-    g_pInputManager->simulateMouseMovement();
+    if (const auto seat = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forClient(m_wlSurface->resource()->client()) : nullptr)
+        seat->refocus();
+    else
+        g_pInputManager->simulateMouseMovement();
 
     setSubsurfaceHead(CSubsurface::create(m_self));
 

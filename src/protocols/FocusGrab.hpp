@@ -10,6 +10,7 @@
 
 class CFocusGrab;
 class CSeatGrab;
+class CSeatManager;
 class CWLSurfaceResource;
 
 class CFocusGrabSurfaceState {
@@ -51,6 +52,7 @@ class CFocusGrab {
     std::unordered_map<WP<CWLSurfaceResource>, UP<CFocusGrabSurfaceState>> m_surfaces;
     SP<CSeatGrab>                                                          m_grab;
 
+    CSeatManager*                                                          m_seat       = nullptr;
     bool                                                                   m_grabActive = false;
 
     friend class CFocusGrabSurfaceState;

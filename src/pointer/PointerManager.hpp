@@ -38,7 +38,8 @@ namespace Pointer {
 
     class CPointerManager {
       public:
-        CPointerManager();
+        explicit CPointerManager(bool softwareOnly = false);
+        void bindMonitor(PHLMONITOR monitor);
 
         void attachPointer(SP<IPointer> pointer);
         void attachTouch(SP<ITouch> touch);
@@ -194,7 +195,9 @@ namespace Pointer {
         // The representative lives only in m_currentCursorImage, including its texture cache.
         std::vector<SCursorImageData> m_cursorImages;
 
-        Vector2D                      m_pointerPos = {0, 0};
+        Vector2D                      m_pointerPos   = {0, 0};
+        bool                          m_softwareOnly = false;
+        PHLMONITORREF                 m_boundMonitor;
 
         struct SMonitorPointerState {
             SMonitorPointerState(const PHLMONITOR& m) : monitor(m) {}
@@ -230,6 +233,7 @@ namespace Pointer {
         std::vector<STransformerMutation>    m_pendingTransformerMutations;
         size_t                               m_transformDepth = 0;
 
+        SP<bool>                             m_lifetime = makeShared<bool>(true);
         struct {
             CHyprSignalListener monitorAdded;
             CHyprSignalListener monitorLayoutChanged;

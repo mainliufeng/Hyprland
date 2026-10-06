@@ -731,12 +731,16 @@ if(BUILD_TESTING OR WITH_TESTS)
   # Enable coverage in main hyprland lib
   target_compile_options(hyprland_lib PRIVATE --coverage)
   target_link_options(hyprland_lib PRIVATE --coverage)
-  target_link_libraries(hyprland_lib PUBLIC gcov)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(hyprland_lib PUBLIC gcov)
+  endif()
 
   # Enable coverage in hyprland exe
   target_compile_options(Hyprland PRIVATE --coverage)
   target_link_options(Hyprland PRIVATE --coverage)
-  target_link_libraries(Hyprland gcov)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(Hyprland gcov)
+  endif()
 endif()
 
 if(BUILD_TESTING)

@@ -18,6 +18,7 @@
 #include "managers/TokenManager.hpp"
 #include "pointer/PointerManager.hpp"
 #include "managers/SeatManager.hpp"
+#include "managers/SeatDesktop.hpp"
 #include "managers/VersionKeeperManager.hpp"
 #include "managers/DonationNagManager.hpp"
 #include "managers/ANRManager.hpp"
@@ -265,6 +266,8 @@ static std::vector<SP<Aquamarine::IOutput>> pendingOutputs;
 //
 
 static bool filterGlobals(const wl_client* client, const wl_global* global, void* data) {
+    if (g_pSeatDesktopRegistry && !g_pSeatDesktopRegistry->allowsGlobal(client, global))
+        return false;
     if (!PROTO::securityContext->isClientSandboxed(client))
         return true;
 
@@ -612,6 +615,7 @@ void CCompositor::cleanup() {
 
     removeAllSignals();
 
+    g_pSeatDesktopRegistry.reset();
     g_pInputManager.reset();
     g_pDynamicPermissionManager.reset();
     g_pDecorationPositioner.reset();
@@ -709,7 +713,8 @@ void CCompositor::initManagers(eManagersInitStage stage) {
             g_pProtocolManager = makeUnique<CProtocolManager>();
 
             LOG(Log::DEBUG, "Creating the SeatManager!");
-            g_pSeatManager = makeUnique<CSeatManager>();
+            g_pSeatManager         = makeUnique<CSeatManager>();
+            g_pSeatDesktopRegistry = makeUnique<CSeatDesktopRegistry>();
 
             LOG(Log::DEBUG, "Creating the SessionLockManager!");
             g_pSessionLockManager = makeUnique<CSessionLockManager>();

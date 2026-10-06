@@ -1,3 +1,4 @@
+#include "core/Seat.hpp"
 #include "PrimarySelection.hpp"
 #include <algorithm>
 #include "../managers/SeatManager.hpp"
@@ -102,28 +103,30 @@ void CPrimarySelectionSource::error(uint32_t code, const std::string& msg) {
     m_resource->error(code, msg);
 }
 
-CPrimarySelectionDevice::CPrimarySelectionDevice(SP<CZwpPrimarySelectionDeviceV1> resource_) : m_resource(resource_) {
+CPrimarySelectionDevice::CPrimarySelectionDevice(SP<CZwpPrimarySelectionDeviceV1> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
     m_client = m_resource->client();
+    if (manager() != g_pSeatManager.get())
+        m_focusListener = manager()->m_events.pointerFocusChange.listen([this] { PROTO::primarySelection->onPointerFocus(manager()); });
 
     m_resource->setDestroy([this](CZwpPrimarySelectionDeviceV1* r) { PROTO::primarySelection->destroyResource(this); });
     m_resource->setOnDestroy([this](CZwpPrimarySelectionDeviceV1* r) { PROTO::primarySelection->destroyResource(this); });
 
-    m_resource->setSetSelection([](CZwpPrimarySelectionDeviceV1* r, wl_resource* sourceR, uint32_t serial) {
+    m_resource->setSetSelection([this](CZwpPrimarySelectionDeviceV1* r, wl_resource* sourceR, uint32_t serial) {
         static auto PPRIMARYSEL = CConfigValue<Config::INTEGER>("misc:middle_click_paste");
 
         if (!*PPRIMARYSEL) {
             LOG(Log::DEBUG, "Ignoring primary selection: disabled in config");
-            g_pSeatManager->setCurrentPrimarySelection(nullptr);
+            manager()->setCurrentPrimarySelection(nullptr);
             return;
         }
 
         auto source = sourceR ? CPrimarySelectionSource::fromResource(sourceR) : CSharedPointer<CPrimarySelectionSource>{};
         if (!source) {
             LOG(Log::DEBUG, "wlr reset selection received");
-            g_pSeatManager->setCurrentPrimarySelection(nullptr);
+            manager()->setCurrentPrimarySelection(nullptr);
             return;
         }
 
@@ -133,7 +136,7 @@ CPrimarySelectionDevice::CPrimarySelectionDevice(SP<CZwpPrimarySelectionDeviceV1
         source->markUsed();
 
         LOG(Log::DEBUG, "wlr manager requests selection to {:x}", (uintptr_t)source.get());
-        g_pSeatManager->setCurrentPrimarySelection(source);
+        manager()->setCurrentPrimarySelection(source);
     });
 }
 
@@ -163,8 +166,8 @@ CPrimarySelectionManager::CPrimarySelectionManager(SP<CZwpPrimarySelectionDevice
     m_resource->setOnDestroy([this](CZwpPrimarySelectionDeviceManagerV1* r) { PROTO::primarySelection->destroyResource(this); });
 
     m_resource->setGetDevice([this](CZwpPrimarySelectionDeviceManagerV1* r, uint32_t id, wl_resource* seat) {
-        const auto RESOURCE =
-            PROTO::primarySelection->m_devices.emplace_back(makeShared<CPrimarySelectionDevice>(makeShared<CZwpPrimarySelectionDeviceV1>(r->client(), r->version(), id)));
+        const auto RESOURCE = PROTO::primarySelection->m_devices.emplace_back(
+            makeShared<CPrimarySelectionDevice>(makeShared<CZwpPrimarySelectionDeviceV1>(r->client(), r->version(), id), CWLSeatResource::fromResource(seat)));
 
         if UNLIKELY (!RESOURCE->good()) {
             r->noMemory();
@@ -264,13 +267,17 @@ void CPrimarySelectionProtocol::sendSelectionToDevice(SP<CPrimarySelectionDevice
 
     LOG(Log::DEBUG, "New offer {:x} for data source {:x}", (uintptr_t)OFFER.get(), (uintptr_t)sel.get());
 
+    OFFER->m_seat = dev->manager();
     dev->sendDataOffer(OFFER);
     OFFER->sendData();
     dev->sendSelection(OFFER);
 }
 
-void CPrimarySelectionProtocol::setSelection(SP<IDataSource> source) {
+void CPrimarySelectionProtocol::setSelection(SP<IDataSource> source, CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         if (o->m_source && o->m_source->hasDnd())
             continue;
         o->m_dead = true;
@@ -279,10 +286,10 @@ void CPrimarySelectionProtocol::setSelection(SP<IDataSource> source) {
     if (!source) {
         LOG(Log::DEBUG, "resetting selection");
 
-        if (!g_pSeatManager->m_state.pointerFocusResource)
+        if (!seat->m_state.pointerFocusResource)
             return;
 
-        auto DESTDEVICE = dataDeviceForClient(g_pSeatManager->m_state.pointerFocusResource->client());
+        auto DESTDEVICE = dataDeviceForClient(seat->m_state.pointerFocusResource->client(), seat);
         if (DESTDEVICE)
             sendSelectionToDevice(DESTDEVICE, nullptr);
 
@@ -291,46 +298,55 @@ void CPrimarySelectionProtocol::setSelection(SP<IDataSource> source) {
 
     LOG(Log::DEBUG, "New selection for data source {:x}", (uintptr_t)source.get());
 
-    if (!g_pSeatManager->m_state.pointerFocusResource)
+    if (!seat->m_state.pointerFocusResource)
         return;
 
-    auto DESTDEVICE = dataDeviceForClient(g_pSeatManager->m_state.pointerFocusResource->client());
+    auto DESTDEVICE = dataDeviceForClient(seat->m_state.pointerFocusResource->client(), seat);
 
     if (!DESTDEVICE) {
         LOG(Log::DEBUG, "CWLDataDeviceProtocol::setSelection: cannot send selection to a client without a data_device");
-        g_pSeatManager->m_selection.currentPrimarySelection.reset();
+        seat->m_selection.currentPrimarySelection.reset();
         return;
     }
 
     sendSelectionToDevice(DESTDEVICE, source);
 }
 
-void CPrimarySelectionProtocol::updateSelection() {
-    if (!g_pSeatManager->m_state.pointerFocusResource)
+void CPrimarySelectionProtocol::updateSelection(CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
+    if (!seat->m_state.pointerFocusResource)
         return;
 
-    auto selection  = g_pSeatManager->m_selection.currentPrimarySelection.lock();
-    auto DESTDEVICE = dataDeviceForClient(g_pSeatManager->m_state.pointerFocusResource->client());
+    auto selection  = seat->m_selection.currentPrimarySelection.lock();
+    auto DESTDEVICE = dataDeviceForClient(seat->m_state.pointerFocusResource->client(), seat);
 
     if (!selection || !DESTDEVICE) {
         LOG(Log::DEBUG, "CPrimarySelectionProtocol::updateSelection: cannot send selection to a client without a data_device");
         return;
     }
 
-    sendSelectionToDevice(DESTDEVICE, g_pSeatManager->m_selection.currentPrimarySelection.lock());
+    sendSelectionToDevice(DESTDEVICE, seat->m_selection.currentPrimarySelection.lock());
 }
 
-void CPrimarySelectionProtocol::onPointerFocus() {
+void CPrimarySelectionProtocol::onPointerFocus(CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         o->m_dead = true;
     }
 
-    updateSelection();
+    updateSelection(seat);
 }
 
-SP<CPrimarySelectionDevice> CPrimarySelectionProtocol::dataDeviceForClient(wl_client* c) {
-    auto it = std::ranges::find_if(m_devices, [c](const auto& e) { return e->client() == c; });
+SP<CPrimarySelectionDevice> CPrimarySelectionProtocol::dataDeviceForClient(wl_client* c, CSeatManager* seat) {
+    seat    = seat ? seat : g_pSeatManager.get();
+    auto it = std::ranges::find_if(m_devices, [c, seat](const auto& e) { return e->client() == c && e->manager() == seat; });
     if (it == m_devices.end())
         return nullptr;
     return *it;
+}
+
+CSeatManager* CPrimarySelectionDevice::manager() const {
+    return m_seat->manager();
 }

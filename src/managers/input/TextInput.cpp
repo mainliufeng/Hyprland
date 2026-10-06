@@ -6,11 +6,11 @@
 #include "../../protocols/InputMethodV2.hpp"
 #include "../../protocols/core/Compositor.hpp"
 
-CTextInput::CTextInput(WP<CTextInputV1> ti) : m_v1Input(ti) {
+CTextInput::CTextInput(WP<CTextInputV1> ti, CInputMethodRelay* relay) : m_relay(relay), m_v1Input(ti) {
     initCallbacks();
 }
 
-CTextInput::CTextInput(WP<CTextInputV3> ti) : m_v3Input(ti) {
+CTextInput::CTextInput(WP<CTextInputV3> ti, CInputMethodRelay* relay) : m_relay(relay), m_v3Input(ti) {
     initCallbacks();
 }
 
@@ -24,8 +24,8 @@ void CTextInput::initCallbacks() {
         m_listeners.reset   = INPUT->m_events.reset.listen([this] { onReset(); });
         m_listeners.destroy = INPUT->m_events.destroy.listen([this] { destroy(); });
 
-        if (Desktop::focusState()->surface() && Desktop::focusState()->surface()->client() == INPUT->client())
-            enter(Desktop::focusState()->surface());
+        if (m_relay->focus() && m_relay->focus()->client() == INPUT->client())
+            enter(m_relay->focus());
     } else {
         const auto INPUT = m_v1Input.lock();
 
@@ -41,33 +41,33 @@ void CTextInput::destroy() {
     m_listeners.surfaceUnmap.reset();
     m_listeners.surfaceDestroy.reset();
 
-    g_pInputManager->m_relay.removeTextInput(this);
-
-    if (!g_pInputManager->m_relay.getFocusedTextInput())
-        g_pInputManager->m_relay.deactivateIME(nullptr, false);
+    auto relay = m_relay;
+    relay->removeTextInput(this);
+    if (!relay->getFocusedTextInput())
+        relay->deactivateIME(nullptr, false);
 }
 
 void CTextInput::onEnabled(SP<CWLSurfaceResource> surfV1) {
     LOG(Log::DEBUG, "TI ENABLE");
 
-    if (g_pInputManager->m_relay.m_inputMethod.expired()) {
+    if (m_relay->m_inputMethod.expired()) {
         // LOG(Log::WARN,  "Enabling TextInput on no IME!");
         return;
     }
 
     // v1 only, map surface to PTI
     if (!isV3()) {
-        if (Desktop::focusState()->surface() != surfV1 || !m_v1Input->m_active)
+        if (m_relay->focus() != surfV1 || !m_v1Input->m_active)
             return;
 
         enter(surfV1);
     }
 
-    g_pInputManager->m_relay.activateIME(this);
+    m_relay->activateIME(this);
 }
 
 void CTextInput::onDisabled() {
-    if (g_pInputManager->m_relay.m_inputMethod.expired()) {
+    if (m_relay->m_inputMethod.expired()) {
         //  LOG(Log::WARN,  "Disabling TextInput on no IME!");
         return;
     }
@@ -81,30 +81,30 @@ void CTextInput::onDisabled() {
     if (!focusedSurface())
         return;
 
-    const auto PFOCUSEDTI = g_pInputManager->m_relay.getFocusedTextInput();
+    const auto PFOCUSEDTI = m_relay->getFocusedTextInput();
     if (!PFOCUSEDTI || PFOCUSEDTI != this)
         return;
 
-    g_pInputManager->m_relay.deactivateIME(this);
+    m_relay->deactivateIME(this);
 }
 
 void CTextInput::onReset() {
-    if (g_pInputManager->m_relay.m_inputMethod.expired())
+    if (m_relay->m_inputMethod.expired())
         return;
 
     if (!focusedSurface())
         return;
 
-    const auto PFOCUSEDTI = g_pInputManager->m_relay.getFocusedTextInput();
+    const auto PFOCUSEDTI = m_relay->getFocusedTextInput();
     if (!PFOCUSEDTI || PFOCUSEDTI != this)
         return;
 
-    g_pInputManager->m_relay.deactivateIME(this, false);
-    g_pInputManager->m_relay.activateIME(this);
+    m_relay->deactivateIME(this, false);
+    m_relay->activateIME(this);
 }
 
 void CTextInput::onCommit() {
-    if (g_pInputManager->m_relay.m_inputMethod.expired()) {
+    if (m_relay->m_inputMethod.expired()) {
         //   LOG(Log::WARN,  "Committing TextInput on no IME!");
         return;
     }
@@ -114,7 +114,7 @@ void CTextInput::onCommit() {
         return;
     }
 
-    g_pInputManager->m_relay.commitIMEState(this);
+    m_relay->commitIMEState(this);
 }
 
 void CTextInput::setFocusedSurface(SP<CWLSurfaceResource> pSurface) {
@@ -145,8 +145,8 @@ void CTextInput::setFocusedSurface(SP<CWLSurfaceResource> pSurface) {
             m_v3Input->m_current.enabled.value            = false;
         }
 
-        if (!g_pInputManager->m_relay.getFocusedTextInput())
-            g_pInputManager->m_relay.deactivateIME(this);
+        if (!m_relay->getFocusedTextInput())
+            m_relay->deactivateIME(this);
     });
 
     m_listeners.surfaceDestroy = pSurface->m_events.destroy.listen([this] {
@@ -165,8 +165,8 @@ void CTextInput::setFocusedSurface(SP<CWLSurfaceResource> pSurface) {
             m_v3Input->m_current.enabled.value            = false;
         }
 
-        if (!g_pInputManager->m_relay.getFocusedTextInput())
-            g_pInputManager->m_relay.deactivateIME(this);
+        if (!m_relay->getFocusedTextInput())
+            m_relay->deactivateIME(this);
     });
 }
 
@@ -217,7 +217,7 @@ void CTextInput::leave() {
 
     setFocusedSurface(nullptr);
 
-    g_pInputManager->m_relay.deactivateIME(this);
+    m_relay->deactivateIME(this);
 }
 
 SP<CWLSurfaceResource> CTextInput::focusedSurface() {
@@ -251,7 +251,7 @@ void CTextInput::commitStateToIME(SP<CInputMethodV2> ime) {
             ime->textContentType(sc<zwpTextInputV3ContentHint>(INPUT->m_pendingContentType.hint), sc<zwpTextInputV3ContentPurpose>(INPUT->m_pendingContentType.purpose));
     }
 
-    g_pInputManager->m_relay.updateAllPopups();
+    m_relay->updateAllPopups();
 
     ime->done();
 }

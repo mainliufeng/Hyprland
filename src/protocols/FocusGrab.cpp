@@ -1,3 +1,5 @@
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SessionLockManager.hpp"
 #include "FocusGrab.hpp"
 #include "../Compositor.hpp"
 #include <hyprland-focus-grab-v1.hpp>
@@ -16,6 +18,8 @@ CFocusGrab::CFocusGrab(SP<CHyprlandFocusGrabV1> resource_) : m_resource(resource
     if UNLIKELY (!m_resource->resource())
         return;
 
+    const auto owner   = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forClient(resource_->client()) : nullptr;
+    m_seat             = owner ? owner->manager() : g_pSeatManager.get();
     m_grab             = makeShared<CSeatGrab>();
     m_grab->m_keyboard = true;
     m_grab->m_pointer  = true;
@@ -45,13 +49,18 @@ bool CFocusGrab::isSurfaceCommitted(SP<CWLSurfaceResource> surface) {
 }
 
 void CFocusGrab::start() {
+    if (g_pSessionLockManager->isSessionLocked() || (m_seat->m_desktop && !m_seat->m_desktop->inputAllowed()))
+        return;
     if (!m_grabActive) {
         m_grabActive = true;
-        g_pSeatManager->setGrab(m_grab);
+        m_seat->setGrab(m_grab);
     }
 
     // Ensure new surfaces are focused if under the mouse when committed.
-    g_pInputManager->simulateMouseMovement();
+    if (m_seat->m_desktop)
+        m_seat->m_desktop->refocus();
+    else
+        g_pInputManager->simulateMouseMovement();
     refocusKeyboard();
 }
 
@@ -59,8 +68,8 @@ void CFocusGrab::finish(bool sendCleared) {
     if (m_grabActive) {
         m_grabActive = false;
 
-        if (g_pSeatManager->m_seatGrab == m_grab)
-            g_pSeatManager->setGrab(nullptr);
+        if (m_seat->m_seatGrab == m_grab)
+            m_seat->setGrab(nullptr);
 
         m_grab->clear();
         m_surfaces.clear();
@@ -92,7 +101,7 @@ void CFocusGrab::eraseSurface(SP<CWLSurfaceResource> surface) {
 }
 
 void CFocusGrab::refocusKeyboard() {
-    auto keyboardSurface = g_pSeatManager->m_state.keyboardFocus;
+    auto keyboardSurface = m_seat->m_state.keyboardFocus;
     if (keyboardSurface && isSurfaceCommitted(keyboardSurface.lock()))
         return;
 
@@ -104,9 +113,12 @@ void CFocusGrab::refocusKeyboard() {
         }
     }
 
-    if (surface)
-        Desktop::focusState()->rawSurfaceFocus(surface);
-    else
+    if (surface) {
+        if (m_seat->m_desktop)
+            m_seat->setKeyboardFocus(surface);
+        else
+            Desktop::focusState()->rawSurfaceFocus(surface);
+    } else
         LOG(Log::ERR, "CFocusGrab::refocusKeyboard called with no committed surfaces. This should never happen.");
 }
 

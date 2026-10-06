@@ -9,9 +9,12 @@
 #include "../helpers/signal/Signal.hpp"
 #include <hyprutils/os/FileDescriptor.hpp>
 
+class CWLSeatResource;
+class CSeatManager;
+
 class CVirtualKeyboardV1Resource {
   public:
-    CVirtualKeyboardV1Resource(SP<CZwpVirtualKeyboardV1> resource_);
+    CVirtualKeyboardV1Resource(SP<CZwpVirtualKeyboardV1> resource_, SP<CWLSeatResource> seat);
     ~CVirtualKeyboardV1Resource();
 
     struct {
@@ -21,12 +24,15 @@ class CVirtualKeyboardV1Resource {
         CSignalT<IKeyboard::SKeymapEvent>    keymap;
     } m_events;
 
-    bool        good();
-    wl_client*  client();
+    CSeatManager* manager() const;
 
-    std::string m_name = "";
+    bool          good();
+    wl_client*    client();
+
+    std::string   m_name = "";
 
   private:
+    SP<CWLSeatResource>       m_seat;
     SP<CZwpVirtualKeyboardV1> m_resource;
 
     void                      releasePressed();

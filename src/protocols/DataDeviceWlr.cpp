@@ -1,3 +1,4 @@
+#include "core/Seat.hpp"
 #include "DataDeviceWlr.hpp"
 #include <algorithm>
 #include "../managers/SeatManager.hpp"
@@ -101,7 +102,7 @@ void CWLRDataSource::error(uint32_t code, const std::string& msg) {
     m_resource->error(code, msg);
 }
 
-CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_) : m_resource(resource_) {
+CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -110,11 +111,11 @@ CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_) : m_resou
     m_resource->setDestroy([this](CZwlrDataControlDeviceV1* r) { PROTO::dataWlr->destroyResource(this); });
     m_resource->setOnDestroy([this](CZwlrDataControlDeviceV1* r) { PROTO::dataWlr->destroyResource(this); });
 
-    m_resource->setSetSelection([](CZwlrDataControlDeviceV1* r, wl_resource* sourceR) {
+    m_resource->setSetSelection([this](CZwlrDataControlDeviceV1* r, wl_resource* sourceR) {
         auto source = sourceR ? CWLRDataSource::fromResource(sourceR) : CSharedPointer<CWLRDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "wlr reset selection received");
-            g_pSeatManager->setCurrentSelection(nullptr);
+            manager()->setCurrentSelection(nullptr);
             return;
         }
 
@@ -124,14 +125,14 @@ CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_) : m_resou
         source->markUsed();
 
         LOG(Log::DEBUG, "wlr manager requests selection to {:x}", (uintptr_t)source.get());
-        g_pSeatManager->setCurrentSelection(source);
+        manager()->setCurrentSelection(source);
     });
 
-    m_resource->setSetPrimarySelection([](CZwlrDataControlDeviceV1* r, wl_resource* sourceR) {
+    m_resource->setSetPrimarySelection([this](CZwlrDataControlDeviceV1* r, wl_resource* sourceR) {
         auto source = sourceR ? CWLRDataSource::fromResource(sourceR) : CSharedPointer<CWLRDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "wlr reset primary selection received");
-            g_pSeatManager->setCurrentPrimarySelection(nullptr);
+            manager()->setCurrentPrimarySelection(nullptr);
             return;
         }
 
@@ -141,7 +142,7 @@ CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_) : m_resou
         source->markUsed();
 
         LOG(Log::DEBUG, "wlr manager requests primary selection to {:x}", (uintptr_t)source.get());
-        g_pSeatManager->setCurrentPrimarySelection(source);
+        manager()->setCurrentPrimarySelection(source);
     });
 }
 
@@ -154,8 +155,8 @@ wl_client* CWLRDataDevice::client() {
 }
 
 void CWLRDataDevice::sendInitialSelections() {
-    PROTO::dataWlr->sendSelectionToDevice(self.lock(), g_pSeatManager->m_selection.currentSelection.lock(), false);
-    PROTO::dataWlr->sendSelectionToDevice(self.lock(), g_pSeatManager->m_selection.currentPrimarySelection.lock(), true);
+    PROTO::dataWlr->sendSelectionToDevice(self.lock(), manager()->m_selection.currentSelection.lock(), false);
+    PROTO::dataWlr->sendSelectionToDevice(self.lock(), manager()->m_selection.currentPrimarySelection.lock(), true);
 }
 
 void CWLRDataDevice::sendDataOffer(SP<CWLRDataOffer> offer) {
@@ -178,7 +179,8 @@ CWLRDataControlManagerResource::CWLRDataControlManagerResource(SP<CZwlrDataContr
     m_resource->setOnDestroy([this](CZwlrDataControlManagerV1* r) { PROTO::dataWlr->destroyResource(this); });
 
     m_resource->setGetDataDevice([this](CZwlrDataControlManagerV1* r, uint32_t id, wl_resource* seat) {
-        const auto RESOURCE = PROTO::dataWlr->m_devices.emplace_back(makeShared<CWLRDataDevice>(makeShared<CZwlrDataControlDeviceV1>(r->client(), r->version(), id)));
+        const auto RESOURCE = PROTO::dataWlr->m_devices.emplace_back(
+            makeShared<CWLRDataDevice>(makeShared<CZwlrDataControlDeviceV1>(r->client(), r->version(), id), CWLSeatResource::fromResource(seat)));
 
         if UNLIKELY (!RESOURCE->good()) {
             r->noMemory();
@@ -280,6 +282,7 @@ void CDataDeviceWLRProtocol::sendSelectionToDevice(SP<CWLRDataDevice> dev, SP<ID
     }
 
     OFFER->m_primary = primary;
+    OFFER->m_seat    = dev->manager();
 
     LOG(Log::DEBUG, "New {}offer {:x} for data source {:x}", primary ? "primary " : " ", (uintptr_t)OFFER.get(), (uintptr_t)sel.get());
 
@@ -291,8 +294,11 @@ void CDataDeviceWLRProtocol::sendSelectionToDevice(SP<CWLRDataDevice> dev, SP<ID
         dev->sendSelection(OFFER);
 }
 
-void CDataDeviceWLRProtocol::setSelection(SP<IDataSource> source, bool primary) {
+void CDataDeviceWLRProtocol::setSelection(SP<IDataSource> source, bool primary, CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
+        if (o->m_seat != seat)
+            continue;
         if (o->m_source && o->m_source->hasDnd())
             continue;
         if (o->m_primary != primary)
@@ -304,6 +310,8 @@ void CDataDeviceWLRProtocol::setSelection(SP<IDataSource> source, bool primary) 
         LOG(Log::DEBUG, "resetting {}selection", primary ? "primary " : " ");
 
         for (auto const& d : m_devices) {
+            if (d->manager() != seat)
+                continue;
             sendSelectionToDevice(d, nullptr, primary);
         }
 
@@ -313,6 +321,8 @@ void CDataDeviceWLRProtocol::setSelection(SP<IDataSource> source, bool primary) 
     LOG(Log::DEBUG, "New {}selection for data source {:x}", primary ? "primary" : "", (uintptr_t)source.get());
 
     for (auto const& d : m_devices) {
+        if (d->manager() != seat)
+            continue;
         sendSelectionToDevice(d, source, primary);
     }
 }
@@ -322,4 +332,8 @@ SP<CWLRDataDevice> CDataDeviceWLRProtocol::dataDeviceForClient(wl_client* c) {
     if (it == m_devices.end())
         return nullptr;
     return *it;
+}
+
+CSeatManager* CWLRDataDevice::manager() const {
+    return m_seat->manager();
 }

@@ -6,6 +6,7 @@
 
 struct wl_client;
 
+class CInputMethodRelay;
 class CTextInputV1;
 class CTextInputV3;
 class CInputMethodV2;
@@ -13,8 +14,8 @@ class CWLSurfaceResource;
 
 class CTextInput {
   public:
-    CTextInput(WP<CTextInputV3> ti);
-    CTextInput(WP<CTextInputV1> ti);
+    CTextInput(WP<CTextInputV3> ti, CInputMethodRelay* relay);
+    CTextInput(WP<CTextInputV1> ti, CInputMethodRelay* relay);
 
     bool                   isV3();
     void                   enter(SP<CWLSurfaceResource> pSurface);
@@ -41,6 +42,7 @@ class CTextInput {
 
     void                   destroy();
 
+    CInputMethodRelay*     m_relay = nullptr;
     WP<CWLSurfaceResource> m_focusedSurface;
     int                    m_enterLocks = 0;
     WP<CTextInputV3>       m_v3Input;

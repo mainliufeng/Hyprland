@@ -1,3 +1,5 @@
+#include "../../managers/SeatDesktop.hpp"
+#include "../../protocols/core/Seat.hpp"
 #include "Commands.hpp"
 #include "../../desktop/view/window/WindowFullscreenPolicy.hpp"
 #include "../../desktop/view/window/WindowGroupMembership.hpp"
@@ -1956,6 +1958,42 @@ static std::string reloadShaders(eHyprCtlOutputFormat format, std::string reques
         return format == FORMAT_JSON ? "{\"ok\": false}" : "error";
 }
 
+static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
+    CVarList args(request, 0, ' ');
+    if (args.size() == 1 || args[1] == "list") {
+        std::string result = format == FORMAT_JSON ? "[" : "";
+        bool        first  = true;
+        for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+            if (!seat->active())
+                continue;
+            const auto monitor  = seat->monitor();
+            const auto position = seat->pointer()->position();
+            if (format == FORMAT_JSON) {
+                if (!first)
+                    result += ",";
+                result += std::format("{{\"name\":\"{}\",\"output\":\"{}\",\"display\":\"{}\",\"cursor\":[{},{}],\"workspace\":\"{}\",\"window\":\"{}\"}}",
+                                      escapeJSONStrings(seat->protocol()->seatName()), monitor ? escapeJSONStrings(monitor->m_name) : "", escapeJSONStrings(seat->socketName()),
+                                      position.x, position.y, monitor && monitor->m_activeWorkspace ? escapeJSONStrings(monitor->m_activeWorkspace->addressableName()) : "",
+                                      seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "");
+            } else
+                result +=
+                    std::format("{} output={} display={} cursor={},{}\n", seat->protocol()->seatName(), monitor ? monitor->m_name : "", seat->socketName(), position.x, position.y);
+            first = false;
+        }
+        return format == FORMAT_JSON ? result + "]" : result;
+    }
+    if (args[1] == "create" && args.size() == 4)
+        return g_pSeatDesktopRegistry->create(args[2], State::monitorState()->query().name(args[3]).run());
+    if (args[1] == "remove" && args.size() == 3)
+        return g_pSeatDesktopRegistry->remove(args[2]);
+    if (args.size() == 4 && args[1] == "workspace") {
+        if (auto seat = g_pSeatDesktopRegistry->forName(args[2]))
+            return seat->switchWorkspace(args[3]);
+        return "seat not found";
+    }
+    return "usage: seat [list|create NAME OUTPUT|remove NAME|workspace NAME WORKSPACE]";
+}
+
 template <typename F>
 static SCommand legacyCommand(std::string name, eCommandMatch match, F handler) {
     return SCommand{
@@ -1966,6 +2004,7 @@ static SCommand legacyCommand(std::string name, eCommandMatch match, F handler) 
 }
 
 void IPC::Socket1::registerBuiltinCommands(CSocket1& socket) {
+    socket.registerCommand(legacyCommand("seat", COMMAND_MATCH_PREFIX, seatRequest));
     socket.registerCommand(legacyCommand("workspaces", COMMAND_MATCH_EXACT, workspacesRequest));
     socket.registerCommand(legacyCommand("workspacerules", COMMAND_MATCH_EXACT, workspaceRulesRequest));
     socket.registerCommand(legacyCommand("activeworkspace", COMMAND_MATCH_EXACT, activeWorkspaceRequest));
