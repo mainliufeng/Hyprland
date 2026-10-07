@@ -77,10 +77,9 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
     m_pointer->warpTo(monitor->m_position + monitor->m_size / 2.0);
     m_listeners.emplace_back(m_manager->m_events.setCursor.listen([this](const auto& event) {
         auto surface = Desktop::View::CWLSurface::fromResource(event.surf);
-        if (!surface) {
+        if (!surface && event.surf) {
             surface = Desktop::View::CWLSurface::create();
-            if (event.surf)
-                surface->assign(event.surf);
+            surface->assign(event.surf);
         }
         m_cursorSurface = surface;
         m_pointer->setCursorSurface(surface, event.hotspot);

@@ -13,6 +13,7 @@
 static struct xdg_activation_v1* activation;
 static unsigned                  activation_serial;
 static unsigned                  key_presses;
+static unsigned                  pointer_serial;
 static char                      activation_token[256];
 static void                      keymap(void* d, struct wl_keyboard* k, unsigned f, int fd, unsigned s) {
     close(fd);
@@ -29,7 +30,20 @@ static void key(void* d, struct wl_keyboard* k, unsigned serial, unsigned time, 
 static void                              mods(void* d, struct wl_keyboard* k, unsigned serial, unsigned dep, unsigned lat, unsigned locked, unsigned group) {}
 static void                              repeat_info(void* d, struct wl_keyboard* k, int rate, int delay) {}
 static const struct wl_keyboard_listener keyboard_listener = {keymap, enter, leave, key, mods, repeat_info};
-static void                              token_done(void* d, struct xdg_activation_token_v1* t, const char* token) {
+static void                              pointer_enter(void* d, struct wl_pointer* p, unsigned serial, struct wl_surface* s, wl_fixed_t x, wl_fixed_t y) {
+    pointer_serial = serial;
+}
+static void                             pointer_leave(void* d, struct wl_pointer* p, unsigned serial, struct wl_surface* s) {}
+static void                             pointer_motion(void* d, struct wl_pointer* p, unsigned time, wl_fixed_t x, wl_fixed_t y) {}
+static void                             pointer_button(void* d, struct wl_pointer* p, unsigned serial, unsigned time, unsigned button, unsigned state) {}
+static void                             pointer_axis(void* d, struct wl_pointer* p, unsigned time, unsigned axis, wl_fixed_t value) {}
+static void                             pointer_frame(void* d, struct wl_pointer* p) {}
+static void                             pointer_source(void* d, struct wl_pointer* p, unsigned source) {}
+static void                             pointer_stop(void* d, struct wl_pointer* p, unsigned time, unsigned axis) {}
+static void                             pointer_discrete(void* d, struct wl_pointer* p, unsigned axis, int discrete) {}
+static const struct wl_pointer_listener pointer_listener = {pointer_enter, pointer_leave,  pointer_motion, pointer_button,  pointer_axis,
+                                                            pointer_frame, pointer_source, pointer_stop,   pointer_discrete};
+static void                             token_done(void* d, struct xdg_activation_token_v1* t, const char* token) {
     snprintf(activation_token, sizeof(activation_token), "%s", token);
 }
 static const struct xdg_activation_token_v1_listener token_listener = {token_done};
@@ -102,7 +116,11 @@ static gboolean                          input(gint fd, GIOCondition condition, 
         return FALSE;
     }
     struct wl_surface* surface = gdk_wayland_window_get_wl_surface(gtk_widget_get_window(window));
-    if (!strncmp(text, "activate", 8)) {
+    if (!strncmp(text, "hide-cursor", 11)) {
+        if (!pointer_serial)
+            return FALSE;
+        wl_pointer_set_cursor(pointer, pointer_serial, NULL, 0, 0);
+    } else if (!strncmp(text, "activate", 8)) {
         struct xdg_activation_token_v1* token = xdg_activation_v1_get_activation_token(activation);
         activation_token[0]                   = 0;
         xdg_activation_token_v1_add_listener(token, &token_listener, NULL);
@@ -173,6 +191,7 @@ int main(int argc, char** argv) {
         return 2;
     wl_display_roundtrip(display);
     struct wl_pointer* pointer = wl_seat_get_pointer(seat);
+    wl_pointer_add_listener(pointer, &pointer_listener, NULL);
     wl_keyboard_add_listener(wl_seat_get_keyboard(seat), &keyboard_listener, NULL);
     struct zwp_relative_pointer_v1* rp = zwp_relative_pointer_manager_v1_get_relative_pointer(relative_manager, pointer);
     zwp_relative_pointer_v1_add_listener(rp, &relative_listener, NULL);

@@ -290,6 +290,15 @@ misc={disable_hyprland_logo=true, disable_splash_rendering=true, force_default_w
     command(agent, 'button 272 1'); command(agent, 'button 272 0')
     ok('dispatch hl.dsp.focus({window="title:^human-window$"})')
     constrained_before = state()
+    ok('seat capture agent1 ' + str(BASE / 'cursor-before-hide.png'))
+    command(constraint, 'hide-cursor')
+    ok('seat capture agent1 ' + str(BASE / 'cursor-after-hide.png'))
+    before_pixels = GdkPixbuf.Pixbuf.new_from_file(str(BASE / 'cursor-before-hide.png')).get_pixels()
+    after_pixels = GdkPixbuf.Pixbuf.new_from_file(str(BASE / 'cursor-after-hide.png')).get_pixels()
+    cursor_changed_bytes = sum(a != b for a, b in zip(before_pixels, after_pixels))
+    assert cursor_changed_bytes > 0, ('null cursor request did not affect capture', cursor_changed_bytes)
+    assert state() == constrained_before
+    record('null cursor surface on agent seat', {'capture_changed_bytes': cursor_changed_bytes, 'human_unchanged': True})
     command(human, 'type CONCURRENT')
     command(agent, 'type TOKEN'); command(constraint, 'activate')
     assert state() == constrained_before
