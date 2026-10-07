@@ -20,6 +20,7 @@
 #include "../render/OpenGL.hpp"
 #include "../desktop/state/FocusState.hpp"
 #include "../managers/SeatManager.hpp"
+#include "../managers/SeatDesktop.hpp"
 #include "../helpers/time/Time.hpp"
 #include "../helpers/Drm.hpp"
 #include "../event/EventBus.hpp"
@@ -1053,7 +1054,7 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
 void CPointerManager::onMonitorLayoutChange() {
     m_currentMonitorLayout.monitorBoxes.clear();
     for (auto const& m : State::monitorState()->monitors()) {
-        if (m->isMirror() || !m->m_enabled || !m->m_output)
+        if (m->isMirror() || !m->m_enabled || !m->m_output || (!m_softwareOnly && g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->isPrivateOutput(m)))
             continue;
 
         m_currentMonitorLayout.monitorBoxes.emplace_back(m->m_position, m->m_size);

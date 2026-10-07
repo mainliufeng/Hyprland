@@ -1183,10 +1183,13 @@ void IHyprRenderer::renderAllClientsForWorkspace(CRenderContext& ctx, PHLMONITOR
     if (mode != eSceneMode::MONITOR && !pWorkspace)
         return;
 
-    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !*PSESSIONLOCKXRAY) {
+    const bool privateScene = g_pSessionLockManager->humanScope() &&
+        ((ctx.m_renderingSnapshot && g_pSessionLockManager->agentMayContinue(ctx.m_sceneSeat)) || (!ctx.m_renderingSnapshot && g_pSeatDesktopRegistry->isPrivateOutput(pMonitor)));
+    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !privateScene && (g_pSessionLockManager->humanScope() || !*PSESSIONLOCKXRAY)) {
         // We stop to render workspaces as soon as the lockscreen was sent the "locked" or "finished" (aka denied) event.
         // In addition we make sure to stop rendering workspaces after misc:lockdead_screen_delay has passed.
-        if (g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
+        if (g_pSessionLockManager->humanScope() || g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() ||
+            g_pSessionLockManager->clientDenied())
             return;
     }
 
@@ -1758,15 +1761,19 @@ void IHyprRenderer::ensureLockTexturesRendered(bool load) {
 void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, const Time::steady_tp& now, const CBox& geometry) {
     TRACY_GPU_ZONE("RenderLockscreen");
 
-    const bool LOCKED = g_pSessionLockManager->isSessionLocked();
+    const bool LOCKED = g_pSessionLockManager->isSessionLocked() && g_pSessionLockManager->protectsOutput(pMonitor);
     if (!LOCKED) {
         ensureLockTexturesRendered(false);
         return;
     }
 
-    const bool RENDERPRIMER = g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied();
-    if (RENDERPRIMER)
+    const bool RENDERPRIMER = g_pSessionLockManager->humanScope() || g_pSeatDesktopRegistry->isPrivateOutput(pMonitor) || g_pSessionLockManager->shallConsiderLockMissing() ||
+        g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied();
+    if (RENDERPRIMER) {
         renderSessionLockPrimer(ctx, pMonitor);
+        if (!ctx.m_renderingSnapshot)
+            g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
+    }
 
     const auto PSLS              = g_pSessionLockManager->getSessionLockSurfaceForMonitor(pMonitor->m_id);
     const bool RENDERLOCKMISSING = (PSLS.expired() || g_pSessionLockManager->clientDenied()) && g_pSessionLockManager->shallConsiderLockMissing();
@@ -1777,7 +1784,11 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
         renderSessionLockMissing(ctx, pMonitor);
     else if (PSLS) {
         renderSessionLockSurface(ctx, PSLS, pMonitor, now);
-        g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
+        if (!ctx.m_renderingSnapshot)
+            g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
+
+        if (g_pSessionLockManager->humanScope())
+            return;
 
         // render layers and then their popups for abovelock rule
         for (auto const& lsl : pMonitor->m_layerSurfaceLayers) {
@@ -1795,7 +1806,7 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
 
 void IHyprRenderer::renderSessionLockPrimer(CRenderContext& ctx, PHLMONITOR pMonitor) {
     static auto PSESSIONLOCKXRAY = CConfigValue<Config::INTEGER>("misc:session_lock_xray");
-    if (*PSESSIONLOCKXRAY)
+    if (*PSESSIONLOCKXRAY && !g_pSessionLockManager->humanScope())
         return;
 
     CRectPassElement::SRectData data;
@@ -2395,7 +2406,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         if (IS_MIRROR)
             renderCursor = false;
         else {
-            if (pMonitor == Desktop::focusState()->monitor()) {
+            if (!g_pSessionLockManager->isSessionLocked() && pMonitor == Desktop::focusState()->monitor()) {
                 Notification::overlay()->draw(ctx, pMonitor);
                 ErrorOverlay::overlay()->draw(ctx);
             }
@@ -3364,13 +3375,13 @@ class CSeatCaptureBuffer : public IHLBuffer {
     std::vector<uint8_t> pixels;
 };
 
-std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path, bool raw) {
-    if (g_pSessionLockManager->isSessionLocked())
+std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path, bool raw, bool authorized) {
+    if (g_pSessionLockManager->isSessionLocked() && (!authorized || !g_pSessionLockManager->agentMayContinue(seat)))
         return "session is locked";
     if (m_context.active())
         return "renderer is busy";
     const auto monitor = workspace ? workspace->m_monitor.lock() : nullptr;
-    if (!monitor || !monitor->m_enabled || !monitor->m_dpmsStatus || (seat && !seat->viewAvailable()))
+    if (!monitor || !monitor->m_enabled || (seat && !seat->viewAvailable()))
         return "seat view is unavailable";
     if (!std::filesystem::path(path).is_absolute())
         return "capture path must be absolute";

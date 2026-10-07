@@ -570,6 +570,12 @@ bool CWLSeatProtocol::hasResources() const {
 }
 
 void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
+    if (g_pSeatDesktopRegistry && this == g_pSeatManager->protocol() && data == this) {
+        if (const auto preferred = g_pSeatDesktopRegistry->forClient(client)) {
+            preferred->protocol()->bindManager(client, preferred->protocol(), ver, id);
+            return;
+        }
+    }
     const auto RESOURCE = m_seatResources.emplace_back(makeShared<CWLSeatResource>(makeShared<CWlSeat>(client, ver, id), this));
 
     if UNLIKELY (!RESOURCE->good()) {
@@ -585,11 +591,6 @@ void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, u
     LOG(Log::DEBUG, "New seat resource bound at {:x}", (uintptr_t)RESOURCE.get());
 
     m_events.newSeatResource.emit(RESOURCE);
-    if (g_pSeatDesktopRegistry) {
-        const auto preferred = g_pSeatDesktopRegistry->forClient(client);
-        if (preferred && preferred->protocol() == this)
-            preferred->announceSharedSeats(client);
-    }
 }
 
 void CWLSeatProtocol::destroyResource(CWLSeatResource* seat) {

@@ -49,7 +49,7 @@ bool CFocusGrab::isSurfaceCommitted(SP<CWLSurfaceResource> surface) {
 }
 
 void CFocusGrab::start() {
-    if (g_pSessionLockManager->isSessionLocked() || (m_seat->m_desktop && !m_seat->m_desktop->inputAllowed()))
+    if ((g_pSessionLockManager->isSessionLocked() && (!m_seat->m_desktop || !m_seat->m_desktop->inputAllowed())) || (m_seat->m_desktop && !m_seat->m_desktop->inputAllowed()))
         return;
     if (!m_grabActive) {
         m_grabActive = true;

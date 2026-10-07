@@ -104,7 +104,7 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     }
 
     // could have abovelock surface, thus only use lock if no ls found
-    if (g_pSessionLockManager->isSessionLocked() && m_foundLSToFocus.expired()) {
+    if (g_pSessionLockManager->isSessionLocked() && (g_pSessionLockManager->humanScope() || m_foundLSToFocus.expired())) {
         m_touchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
         if (!m_touchData.touchFocusLockSurface)
             LOG(Log::WARN, "The session is locked but can't find a lock surface");

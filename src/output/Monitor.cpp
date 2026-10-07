@@ -2605,7 +2605,10 @@ bool CMonitorState::commit() {
 
     ensureBufferPresent();
 
-    bool ret = m_owner->m_output->commit();
+    const bool enabled = m_owner->m_output->state->state().enabled;
+    bool       ret     = m_owner->m_output->commit();
+    if (ret && g_pSessionLockManager)
+        g_pSessionLockManager->onOutputCommit(m_owner->m_self.lock(), enabled);
     return ret;
 }
 

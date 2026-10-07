@@ -1968,11 +1968,14 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
         return "seat view is unavailable";
     const auto cursor = seat->pointer()->position();
     return std::format("{{\"name\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\",\"paused\":{},\"available\":{},"
+                       "\"humanLockPolicy\":\"{}\",\"humanLocked\":{},\"lockScope\":\"{}\",\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\","
                        "\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
                        "\"windowId\":\"{}\",\"window\":\"{}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
                        "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
                        escapeJSONStrings(seat->protocol()->seatName()), escapeJSONStrings(seat->socketName()), seat->controlGeneration(), seat->paused(), seat->viewAvailable(),
-                       escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()), escapeJSONStrings(seat->workspace()->addressableName()),
+                       seat->continuesOnHumanLock() ? "continue" : "pause", g_pSessionLockManager->isSessionLocked(),
+                       g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->humanScope() ? "human" : "session") : "none", g_pSessionLockManager->lockEpoch(),
+                       seat->viewEpoch(), escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()), escapeJSONStrings(seat->workspace()->addressableName()),
                        escapeJSONStrings(view->addressableName()), g_pSeatDesktopRegistry->windowIdentity(seat->window()),
                        seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "", cursor.x, cursor.y, view == seat->workspace(), output->m_position.x,
                        output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x, output->m_transformedSize.y, output->m_scale,
@@ -1982,17 +1985,51 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1"]})";
+    if (args.size() == 2 && args[1] == "lock-state")
+        return g_pSessionLockManager->protectionStateJSON();
+    if (args.size() == 3 && args[1] == "create-private-output")
+        return g_pSeatDesktopRegistry->createPrivateOutput(args[2]);
+    if (args.size() == 3 && args[1] == "private-output")
+        return g_pSeatDesktopRegistry->registerPrivateOutput(State::monitorState()->query().name(args[2]).run());
+    if (args.size() == 2 && args[1] == "private-outputs") {
+        std::string result = "[";
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            if (!g_pSeatDesktopRegistry->isPrivateOutput(monitor))
+                continue;
+            if (result.size() > 1)
+                result += ",";
+            result += std::format("\"{}\"", escapeJSONStrings(monitor->m_name));
+        }
+        return result + "]";
+    }
     if (args.size() == 3 && args[1] == "state") {
         const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
         return seat ? seatState(seat) : "seat not found";
+    }
+    if (args.size() == 6 && (args[1] == "lock-policy" || args[1] == "export-grant")) {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        if (g_pSessionLockManager->isSessionLocked())
+            return "management grants are disabled while locked";
+        if (!seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4])
+            return "stale seat identity or generation";
+        if (args[1] == "lock-policy") {
+            if (args[5] != "pause" && args[5] != "continue")
+                return "invalid lock policy";
+            seat->setHumanLockPolicy(args[5] == "continue");
+        } else {
+            if (args[5].size() < 32 || args[5].size() > 128)
+                return "invalid export grant";
+            seat->setCaptureGrant(args[5]);
+        }
+        return seatState(seat);
     }
     if (args.size() >= 6 && (args[1] == "control" || args[1] == "act")) {
         const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
         if (!seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4])
             return "stale seat identity or control generation";
         if (args[1] == "control" && args.size() == 6 && (args[5] == "pause" || args[5] == "resume")) {
-            if (args[5] == "resume" && !seat->viewAvailable())
+            if (args[5] == "resume" && (g_pSessionLockManager->isSessionLocked() || !seat->viewAvailable()))
                 return "seat view is unavailable";
             seat->setPaused(args[5] == "pause");
             return seatState(seat);
@@ -2012,10 +2049,13 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
         }
         return "invalid seat action";
     }
-    if (args.size() == 7 && args[1] == "snapshot") {
+    if ((args.size() == 7 && args[1] == "snapshot") || (args.size() == 9 && args[1] == "agent-snapshot")) {
         const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
         if (!seat || seat->socketName() != args[3])
             return "stale seat identity";
+        const bool authorized = args[1] == "agent-snapshot";
+        if (authorized && (std::to_string(seat->controlGeneration()) != args[7] || !seat->captureGranted(args[8]) || args[4] != "current"))
+            return "invalid Agent export authorization";
         const auto view = args[4] == "current" ? seat->workspace() : State::workspaceState()->query().input(args[4]).run();
         if (!view)
             return "observed workspace does not exist";
@@ -2023,7 +2063,7 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
             return "unsupported capture format";
         // The compositor thread renders and serializes metadata in one request.
         // Existing-workspace observation never calls switchWorkspace or focus.
-        const auto result = g_pHyprRenderer->captureSeatWorkspace(view, seat, args[6], args[5] == "argb");
+        const auto result = g_pHyprRenderer->captureSeatWorkspace(view, seat, args[6], args[5] == "argb", authorized);
         if (result != "ok")
             return result;
         static uint64_t nextFrame = 0;

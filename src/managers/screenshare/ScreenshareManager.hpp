@@ -177,6 +177,7 @@ namespace Screenshare {
         WP<CScreenshareSession> m_session;
         FScreenshareCallback    m_callback;
         SP<IHLBuffer>           m_buffer;
+        uint64_t                m_lockEpoch  = 0;
         Vector2D                m_bufferSize = Vector2D(0, 0);
         CRegion                 m_damage; // damage in buffer coords
         bool                    m_shared = false, m_copied = false, m_failed = false;

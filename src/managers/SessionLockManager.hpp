@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+class CSeatDesktop;
 class CSessionLockSurface;
 class CSessionLock;
 class CWLSurfaceResource;
@@ -59,19 +60,33 @@ class CSessionLockManager {
     WP<SSessionLockSurface> getSessionLockSurfaceForMonitor(uint64_t);
 
     bool                    isSessionLocked();
+    bool                    humanScope() const;
+    uint64_t                lockEpoch() const;
+    bool                    protectsOutput(PHLMONITOR monitor) const;
+    bool                    agentMayContinue(const CSeatDesktop* seat) const;
     bool                    clientLocked();
-    bool                    clientDenied();
-    bool                    isSurfaceSessionLock(SP<CWLSurfaceResource>);
-    bool                    anySessionLockSurfacesPresent();
+    bool                    outputsSecure() const;
+    bool                    confirmedOff(PHLMONITOR monitor) const;
+    void                    onOutputCommit(PHLMONITOR monitor, bool enabled);
+    std::string             protectionStateJSON() const;
+    bool                    hasOwner() const {
+        return m_sessionLock != nullptr;
+    }
+    bool     clientDenied();
+    bool     isSurfaceSessionLock(SP<CWLSurfaceResource>);
+    bool     anySessionLockSurfacesPresent();
 
-    void                    forceUnlock();
-    void                    forceLock();
+    void     forceUnlock();
+    void     forceLock();
+    void     abandonToFullLock();
 
-    void                    removeSessionLockSurface(SSessionLockSurface*);
+    void     removeSessionLockSurface(SSessionLockSurface*);
 
-    void                    onLockscreenRenderedOnMonitor(uint64_t id);
+    void     onLockscreenRenderedOnMonitor(uint64_t id);
+    uint64_t takeRenderedLock(uint64_t id);
+    void     onLockscreenPresented(uint64_t id, uint64_t epoch);
 
-    bool                    shallConsiderLockMissing();
+    bool     shallConsiderLockMissing();
 
     struct {
         CSignalT<> lock;
@@ -79,12 +94,21 @@ class CSessionLockManager {
     } m_events;
 
   private:
-    UP<SSessionLock> m_sessionLock;
+    UP<SSessionLock>                       m_sessionLock;
+    bool                                   m_humanScope = false;
+    uint64_t                               m_lockEpoch  = 0;
+    uint64_t                               m_lockId     = 0;
+    std::unordered_map<uint64_t, uint64_t> m_presentedLocks;
+    std::vector<PHLMONITORREF>             m_offOutputs;
+    std::vector<CHyprSignalListener>       m_outputListeners;
+    std::unordered_map<uint64_t, uint64_t> m_renderedLocks;
 
     struct {
         CHyprSignalListener newLock;
     } m_listeners;
 
+    void invalidateOutputs();
+    void watchOutput(PHLMONITOR monitor);
     void onNewSessionLock(SP<CSessionLock> pWlrLock);
     void removeSendLockedTimer();
     void clearSessionLock();

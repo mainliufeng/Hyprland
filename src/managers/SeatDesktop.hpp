@@ -9,8 +9,10 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <hyprutils/os/FileDescriptor.hpp>
 
+class IWaylandProtocol;
 class CXCursorManager;
 class CInputMethodRelay;
 class CSeatManager;
@@ -54,14 +56,17 @@ class CSeatDesktop {
     bool                                         inputAllowed() const;
     bool                                         viewAvailable() const;
     bool                                         paused() const;
+    bool                                         continuesOnHumanLock() const;
+    void                                         setHumanLockPolicy(bool allow);
+    void                                         setCaptureGrant(const std::string& grant);
+    bool                                         captureGranted(const std::string& grant) const;
     uint64_t                                     controlGeneration() const;
+    uint64_t                                     viewEpoch() const;
     void                                         setPaused(bool paused);
     void                                         retire();
     const std::string&                           socketName() const;
     bool                                         ownsClient(const wl_client* client) const;
     bool                                         allowsInputSource(wl_client* client);
-    bool                                         preferredSeatBound(const wl_client* client) const;
-    void                                         announceSharedSeats(wl_client* client);
     void                                         forgetInputClient(wl_client* client);
     Layout::Supplementary::CDragStateController* dragController() const;
     void                                         setCursorShape(const std::string& name);
@@ -92,17 +97,21 @@ class CSeatDesktop {
     UP<CXCursorManager>                                  m_cursorTheme;
     UP<Layout::Supplementary::CDragStateController>      m_dragController;
     PHLMONITORREF                                        m_monitor;
+    PHLMONITORREF                                        m_homeOutput;
     PHLWORKSPACE                                         m_workspace;
     PHLWINDOWREF                                         m_window;
-    bool                                                 m_active            = true;
-    bool                                                 m_paused            = false;
-    bool                                                 m_managedControl    = false;
-    uint64_t                                             m_controlGeneration = 1;
+    bool                                                 m_active              = true;
+    bool                                                 m_paused              = false;
+    bool                                                 m_managedControl      = false;
+    bool                                                 m_continueOnHumanLock = false;
+    uint64_t                                             m_controlGeneration   = 1;
+    uint64_t                                             m_viewEpoch           = 1;
     std::unordered_map<IHID*, uint64_t>                  m_deviceGenerations;
     std::unordered_map<wl_client*, UP<SSeatInputClient>> m_inputClients;
     Hyprutils::OS::CFileDescriptor                       m_socketFd;
     wl_event_source*                                     m_socketSource = nullptr;
     std::string                                          m_socketName;
+    std::string                                          m_captureGrant;
     std::string                                          m_socketPath;
     std::vector<SP<IKeyboard>>                           m_keyboards;
     std::vector<SP<IPointer>>                            m_pointers;
@@ -124,6 +133,9 @@ class CSeatDesktopRegistry {
     CSeatDesktop*                        forClient(const wl_client* client) const;
     bool                                 allowsGlobal(const wl_client* client, const wl_global* global) const;
     void                                 refreshWorkspace(PHLWORKSPACE workspace);
+    bool                                 isPrivateOutput(PHLMONITOR monitor) const;
+    std::string                          registerPrivateOutput(PHLMONITOR monitor);
+    std::string                          createPrivateOutput(const std::string& name);
     bool                                 isSeatGlobal(const wl_global* global) const;
     bool                                 usesWorkspace(PHLWORKSPACE workspace) const;
     bool                                 focusesWindow(PHLWINDOW window) const;
@@ -135,6 +147,10 @@ class CSeatDesktopRegistry {
     // children may outlive wl_seat and removal of a registry global.
     void                                                            collectRetired();
     std::vector<UP<CSeatDesktop>>                                   m_seats;
+    UP<IWaylandProtocol>                                            m_sharedPrimarySeat;
+    std::vector<PHLMONITORREF>                                      m_privateOutputs;
+    std::unordered_set<std::string>                                 m_pendingPrivateOutputs;
+    CHyprSignalListener                                             m_privateOutputAdded;
     SP<CEventLoopTimer>                                             m_frameTimer;
     uint64_t                                                        m_nextWindowIdentity = 0;
     std::unordered_map<void*, std::pair<PHLWINDOWREF, std::string>> m_windowIdentities;

@@ -1,4 +1,5 @@
 #include "../Compositor.hpp"
+#include "../event/EventBus.hpp"
 #include "../protocols/core/Output.hpp"
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -39,6 +40,8 @@
 #include "../state/WorkspaceState.hpp"
 #include "../state/MonitorState.hpp"
 #include "../protocols/LayerShell.hpp"
+#include "../protocols/SessionLock.hpp"
+#include <aquamarine/backend/Backend.hpp>
 #include "../layout/supplementary/DragController.hpp"
 #include "../layout/space/Space.hpp"
 #include "../helpers/time/Time.hpp"
@@ -56,14 +59,13 @@ struct SSeatInputClient {
     CSeatDesktop* seat       = nullptr;
     wl_client*    client     = nullptr;
     uint64_t      generation = 0;
-    bool          preferred  = false;
 
     ~SSeatInputClient() {
         wl_list_remove(&destroy.link);
     }
 };
 
-CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_monitor(monitor), m_workspace(monitor->m_activeWorkspace) {
+CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_monitor(monitor), m_homeOutput(monitor), m_workspace(monitor->m_activeWorkspace) {
     m_protocol           = makeUnique<CWLSeatProtocol>(&wl_seat_interface, 9, "WLSeat-" + name, name);
     m_manager            = makeUnique<CSeatManager>(m_protocol.get());
     m_manager->m_desktop = this;
@@ -101,6 +103,8 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_pointer->setCursorBuffer(buffer, image.hotspot / m_monitor->m_scale, m_monitor->m_scale);
     }));
     m_listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] {
+        if (g_pSessionLockManager->agentMayContinue(this))
+            return;
         setPaused(true);
         m_dragController->dragEnd();
         PROTO::data->abortDndIfPresent(m_manager.get());
@@ -118,10 +122,7 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_pointer->setCursorBuffer(Pointer::Cursor::mgr()->getCursorBuffer(), image.hotspot, image.scale);
         refocus(0, true);
     }));
-    m_listeners.emplace_back(monitor->m_events.disconnect.listen([this, original = PHLMONITORREF{monitor}] {
-        if (m_monitor == original)
-            retire();
-    }));
+    m_listeners.emplace_back(monitor->m_events.disconnect.listen([this, original = PHLMONITORREF{monitor}] { retire(); }));
     m_socketName        = std::format("seat-{}-{}", name, wl_display_next_serial(g_pCompositor->m_wlDisplay));
     m_socketPath        = (std::filesystem::path(g_pCompositor->m_hyprTempDataRoot).parent_path() / m_socketName).string();
     sockaddr_un address = {.sun_family = AF_UNIX};
@@ -202,11 +203,17 @@ bool CSeatDesktop::inputAllowed() const {
 }
 
 bool CSeatDesktop::viewAvailable() const {
-    return m_active && m_monitor && m_monitor->m_enabled && m_monitor->m_dpmsStatus && !g_pSessionLockManager->isSessionLocked();
+    return m_active && m_homeOutput && m_homeOutput->m_enabled && m_monitor && m_monitor->m_enabled &&
+        (g_pSeatDesktopRegistry->isPrivateOutput(m_homeOutput.lock()) || m_monitor->m_dpmsStatus) &&
+        (!g_pSessionLockManager->isSessionLocked() || g_pSessionLockManager->agentMayContinue(this));
 }
 
 bool CSeatDesktop::paused() const {
     return m_paused;
+}
+
+uint64_t CSeatDesktop::viewEpoch() const {
+    return m_viewEpoch;
 }
 
 uint64_t CSeatDesktop::controlGeneration() const {
@@ -233,6 +240,7 @@ void CSeatDesktop::setPaused(bool paused) {
     m_manager->setKeyboardFocus(nullptr);
     m_manager->setPointerFocus(nullptr, {});
     ++m_controlGeneration;
+    m_captureGrant.clear();
     m_paused = paused;
     IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("{},{},{}", protocol()->seatName(), m_controlGeneration, m_paused ? "paused" : "active")});
 }
@@ -497,6 +505,8 @@ void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface)
     auto previous = m_window.lock();
     m_windowUnmap.reset();
     m_windowDestroy.reset();
+    if (previous != window)
+        ++m_viewEpoch;
     m_window = window;
     if (previous && previous != window) {
         if (!Desktop::focusState()->isWindowActive(previous))
@@ -545,7 +555,6 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
     }
     auto                   hitTest = Desktop::viewState()->hitTest();
     Vector2D               local;
-    PHLLS                  layer;
     PHLWINDOW              window;
     SP<CWLSurfaceResource> surface;
     if (!PROTO::data->dndActive(m_manager.get()) && !m_buttons.empty() && m_manager->m_state.pointerFocus) {
@@ -559,21 +568,11 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
             surface = popup->getSurface();
             local   = position - popup->globalBox().pos();
         }
-        if (!surface && workspace() && workspace()->visible())
-            surface = hitTest.layerPopupSurfaceAt(position, monitor(), &local, &layer);
-        for (const auto level : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP}) {
-            if (!surface && workspace() && workspace()->visible())
-                surface = hitTest.layerSurfaceAt(position, &m_monitor->m_layerSurfaceLayers[level], &local, &layer);
-        }
         if (!surface) {
             auto current = workspace();
             window       = hitTest.windowAtWorkspace(position, current, Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
             if (window)
                 surface = hitTest.windowSurfaceAt(position, window, local);
-        }
-        for (const auto level : {ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND}) {
-            if (!surface && workspace() && workspace()->visible())
-                surface = hitTest.layerSurfaceAt(position, &m_monitor->m_layerSurfaceLayers[level], &local, &layer);
         }
     }
     if (window && (window->backend().isX11() || window->m_workspace != workspace())) {
@@ -625,8 +624,9 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name) {
     focusWindow(nullptr);
     m_manager->setPointerFocus(nullptr, {});
     const auto oldMonitor = monitor();
-    m_workspace           = current;
-    m_monitor             = current->m_monitor.lock();
+    ++m_viewEpoch;
+    m_workspace = current;
+    m_monitor   = current->m_monitor.lock();
     m_pointer->bindMonitor(monitor());
     if (oldMonitor != monitor())
         m_pointer->warpTo(monitor()->m_position + monitor()->m_size / 2.0);
@@ -642,7 +642,7 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name) {
 }
 
 void CSeatDesktopRegistry::refreshWorkspace(PHLWORKSPACE workspace) {
-    if (!workspace || workspace->visible() || g_pSessionLockManager->isSessionLocked())
+    if (!workspace || (workspace->visible() && !g_pSessionLockManager->isSessionLocked() && workspace->m_monitor && workspace->m_monitor->m_dpmsStatus))
         return;
     const auto now  = Time::steadyNow();
     auto       tick = [&now](SP<CWLSurfaceResource> surface) {
@@ -663,15 +663,29 @@ void CSeatDesktopRegistry::refreshWorkspace(PHLWORKSPACE workspace) {
     }
 }
 
+class CSharedPrimarySeat : public IWaylandProtocol {
+  public:
+    CSharedPrimarySeat() : IWaylandProtocol(&wl_seat_interface, 9, "shared-primary-seat") {}
+    void bindManager(wl_client* client, void* data, uint32_t version, uint32_t id) override {
+        g_pSeatManager->protocol()->bindManager(client, this, version, id);
+    }
+};
+
 CSeatDesktopRegistry::CSeatDesktopRegistry() {
-    m_frameTimer = makeShared<CEventLoopTimer>(
+    m_sharedPrimarySeat  = makeUnique<CSharedPrimarySeat>();
+    m_privateOutputAdded = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR monitor) {
+        if (m_pendingPrivateOutputs.erase(monitor->m_name))
+            m_privateOutputs.emplace_back(monitor);
+    });
+    m_frameTimer         = makeShared<CEventLoopTimer>(
         std::nullopt,
         [this](auto timer, void*) {
-            if (g_pHyprRenderer && g_pSessionLockManager && !g_pSessionLockManager->isSessionLocked()) {
+            if (g_pHyprRenderer && g_pSessionLockManager) {
                 std::vector<PHLWORKSPACE> updated;
                 for (const auto& seat : m_seats) {
                     const auto current = seat->workspace();
-                    if (!seat->viewAvailable() || !current || current->visible() || std::ranges::find(updated, current) != updated.end())
+                    if (!seat->viewAvailable() || !current || (current->visible() && !g_pSessionLockManager->isSessionLocked() && seat->monitor()->m_dpmsStatus) ||
+                        std::ranges::find(updated, current) != updated.end())
                         continue;
                     updated.emplace_back(current);
                     refreshWorkspace(current);
@@ -697,6 +711,8 @@ bool CSeatDesktopRegistry::focusesWindow(PHLWINDOW window) const {
 }
 
 std::string CSeatDesktopRegistry::create(const std::string& name, PHLMONITOR monitor) {
+    if (g_pSessionLockManager->isSessionLocked())
+        return "cannot create seats while locked";
     collectRetired();
     if (name.empty() || name == HL_SEAT_NAME || name.size() > 64 ||
         name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") != std::string::npos)
@@ -785,10 +801,22 @@ CSeatDesktop* CSeatDesktopRegistry::forClient(const wl_client* client) const {
 }
 
 bool CSeatDesktopRegistry::allowsGlobal(const wl_client* client, const wl_global* global) const {
-    // Advertise the socket's preferred seat first for single-seat clients such
-    // as Chromium. Binding it reveals all shared seats; this never owns windows.
+    // The first (primary) global binds the socket's preferred seat. All other
+    // seats must be in the initial registry roundtrip: GTK3 does not instantiate
+    // devices from late seat announcements. A filtered alias exposes the real
+    // primary seat to shared clients without changing any compositor globals.
     const auto preferred = forClient(client);
-    return !preferred || !isSeatGlobal(global) || preferred->protocol()->getGlobal() == global || preferred->preferredSeatBound(client);
+    if (global == m_sharedPrimarySeat->getGlobal())
+        return preferred != nullptr;
+    if (!preferred) {
+        for (const auto& [name, output] : PROTO::outputs) {
+            if (output->getGlobal() == global && isPrivateOutput(output->m_monitor.lock()))
+                return false;
+        }
+    }
+    if (preferred && PROTO::humanLock && PROTO::humanLock->getGlobal() == global)
+        return false;
+    return !preferred || preferred->protocol()->getGlobal() != global;
 }
 
 void CSeatDesktopRegistry::collectRetired() {
@@ -820,11 +848,6 @@ void CSeatDesktop::forgetInputClient(wl_client* client) {
     m_inputClients.erase(client);
 }
 
-bool CSeatDesktop::preferredSeatBound(const wl_client* client) const {
-    const auto it = m_inputClients.find(cc<wl_client*>(client));
-    return it != m_inputClients.end() && it->second->preferred;
-}
-
 bool CSeatDesktop::allowsInputSource(wl_client* client) {
     auto& source = m_inputClients[client];
     if (!source) {
@@ -842,40 +865,46 @@ bool CSeatDesktop::allowsInputSource(wl_client* client) {
     return m_active && (!m_managedControl || (!m_paused && source->generation == m_controlGeneration));
 }
 
-void CSeatDesktop::announceSharedSeats(wl_client* client) {
-    // Create the lifecycle registration without granting an input generation.
-    auto& source = m_inputClients[client];
-    if (!source) {
-        source                 = makeUnique<SSeatInputClient>();
-        source->seat           = this;
-        source->client         = client;
-        source->destroy.notify = [](wl_listener* listener, void*) {
-            const auto registration = rc<SSeatInputClient*>(listener);
-            registration->seat->forgetInputClient(registration->client);
-        };
-        wl_client_add_destroy_listener(client, &source->destroy);
+bool CSeatDesktop::continuesOnHumanLock() const {
+    return m_continueOnHumanLock;
+}
+void CSeatDesktop::setHumanLockPolicy(bool allow) {
+    m_continueOnHumanLock = allow;
+}
+bool CSeatDesktopRegistry::isPrivateOutput(PHLMONITOR monitor) const {
+    return monitor && (m_pendingPrivateOutputs.contains(monitor->m_name) || std::ranges::any_of(m_privateOutputs, [&](const auto& ref) { return ref == monitor; }));
+}
+std::string CSeatDesktopRegistry::registerPrivateOutput(PHLMONITOR monitor) {
+    if (g_pSessionLockManager->isSessionLocked())
+        return "output policy cannot change while locked";
+    if (!monitor || !monitor->m_createdByUser || !monitor->m_output || monitor->m_output->getBackend()->type() != Aquamarine::AQ_BACKEND_HEADLESS)
+        return "only managed headless outputs can be private";
+    if (!isPrivateOutput(monitor))
+        m_privateOutputs.emplace_back(monitor);
+    return "ok";
+}
+
+void CSeatDesktop::setCaptureGrant(const std::string& grant) {
+    m_captureGrant = grant;
+}
+bool CSeatDesktop::captureGranted(const std::string& grant) const {
+    return !grant.empty() && grant == m_captureGrant;
+}
+
+std::string CSeatDesktopRegistry::createPrivateOutput(const std::string& name) {
+    if (g_pSessionLockManager->isSessionLocked())
+        return "cannot create outputs while locked";
+    if (name.empty() || name.size() > 96 || name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") != std::string::npos)
+        return "invalid private output name";
+    if (m_pendingPrivateOutputs.contains(name) || State::monitorState()->query().name(name).run())
+        return "output already exists";
+    m_pendingPrivateOutputs.insert(name);
+    for (const auto& implementation : g_pCompositor->m_aqBackend->getImplementations()) {
+        if (implementation->type() != Aquamarine::AQ_BACKEND_HEADLESS)
+            continue;
+        if (implementation->createOutput(name))
+            return "ok";
     }
-    if (source->preferred)
-        return;
-    source->preferred = true;
-    wl_client_for_each_resource(
-        client,
-        [](wl_resource* resource, void* data) {
-            if (std::string_view(wl_resource_get_class(resource)) != "wl_registry")
-                return WL_ITERATOR_CONTINUE;
-            const auto preferred = sc<CSeatDesktop*>(data);
-            const auto send      = [resource, preferred](CWLSeatProtocol* protocol) {
-                if (protocol == preferred->protocol() || !protocol->getGlobal())
-                    return;
-                const auto global = protocol->getGlobal();
-                wl_registry_send_global(resource, wl_global_get_name(global, wl_resource_get_client(resource)), "wl_seat", wl_global_get_version(global));
-            };
-            send(g_pSeatManager->protocol());
-            for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
-                if (seat->active())
-                    send(seat->protocol());
-            }
-            return WL_ITERATOR_CONTINUE;
-        },
-        this);
+    m_pendingPrivateOutputs.erase(name);
+    return "headless output creation failed";
 }

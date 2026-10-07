@@ -1,4 +1,6 @@
 #include "ScreenshareManager.hpp"
+#include "../SessionLockManager.hpp"
+#include "../SeatDesktop.hpp"
 #include "../../render/OpenGL.hpp"
 #include "../../Compositor.hpp"
 #include "../../render/Renderer.hpp"
@@ -68,7 +70,8 @@ void CScreenshareSession::stop() {
 }
 
 bool CScreenshareSession::isActive() {
-    return !m_stopped;
+    return !m_stopped &&
+        !(g_pSessionLockManager->isSessionLocked() && (m_type == SHARE_WINDOW || g_pSeatDesktopRegistry->isPrivateOutput(monitor()) || !g_pSessionLockManager->outputsSecure()));
 }
 
 bool CScreenshareSession::isStale() {

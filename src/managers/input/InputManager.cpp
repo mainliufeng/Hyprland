@@ -313,6 +313,43 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         !SKIP_CURSOR_FRAME_SCHEDULE)
         CURSOR_MONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 
+    if (g_pSessionLockManager->isSessionLocked()) {
+
+        if (PMONITOR != Desktop::focusState()->monitor())
+            Desktop::focusState()->rawMonitorFocus(PMONITOR);
+
+        // set keyboard focus on session lock surface regardless of layers
+        const auto PSESSIONLOCKSURFACE = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
+        const auto foundLockSurface    = PSESSIONLOCKSURFACE ? PSESSIONLOCKSURFACE->surface->surface() : nullptr;
+
+        Desktop::focusState()->rawSurfaceFocus(foundLockSurface);
+
+        // search for interactable abovelock surfaces for pointer focus, or use session lock surface if not found
+        if (!g_pSessionLockManager->humanScope())
+            for (auto& lsl : PMONITOR->m_layerSurfaceLayers | std::views::reverse) {
+                foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(mouseCoords, &lsl, &surfaceCoords, &pFoundLayerSurface, true);
+
+                if (foundSurface)
+                    break;
+            }
+
+        if (!foundSurface) {
+            surfaceCoords = mouseCoords - PMONITOR->m_position;
+            foundSurface  = foundLockSurface;
+        }
+
+        if (refocus) {
+            m_foundLSToFocus      = pFoundLayerSurface;
+            m_foundWindowToFocus  = pFoundWindow;
+            m_foundSurfaceToFocus = foundSurface;
+        }
+
+        g_pSeatManager->setPointerFocus(foundSurface, surfaceCoords);
+        g_pSeatManager->sendPointerMotion(time, surfaceCoords);
+
+        return;
+    }
+
     // constraints
     auto confineToRegion = [&](const CRegion& rg, SP<Desktop::View::CWLSurface> surf) {
         if (!surf)
@@ -384,39 +421,6 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         pFoundWindow = Desktop::viewState()->hitTest().windowAt(mouseCoords, Desktop::View::FOCUS_PRIORITY);
         if (pFoundWindow)
             foundSurface = Desktop::viewState()->hitTest().windowSurfaceAt(mouseCoords, pFoundWindow, surfaceCoords);
-    }
-
-    if (!foundSurface && g_pSessionLockManager->isSessionLocked()) {
-
-        // set keyboard focus on session lock surface regardless of layers
-        const auto PSESSIONLOCKSURFACE = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
-        const auto foundLockSurface    = PSESSIONLOCKSURFACE ? PSESSIONLOCKSURFACE->surface->surface() : nullptr;
-
-        Desktop::focusState()->rawSurfaceFocus(foundLockSurface);
-
-        // search for interactable abovelock surfaces for pointer focus, or use session lock surface if not found
-        for (auto& lsl : PMONITOR->m_layerSurfaceLayers | std::views::reverse) {
-            foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(mouseCoords, &lsl, &surfaceCoords, &pFoundLayerSurface, true);
-
-            if (foundSurface)
-                break;
-        }
-
-        if (!foundSurface) {
-            surfaceCoords = mouseCoords - PMONITOR->m_position;
-            foundSurface  = foundLockSurface;
-        }
-
-        if (refocus) {
-            m_foundLSToFocus      = pFoundLayerSurface;
-            m_foundWindowToFocus  = pFoundWindow;
-            m_foundSurfaceToFocus = foundSurface;
-        }
-
-        g_pSeatManager->setPointerFocus(foundSurface, surfaceCoords);
-        g_pSeatManager->sendPointerMotion(time, surfaceCoords);
-
-        return;
     }
 
     PHLWINDOW forcedFocus = m_forcedFocus.lock();

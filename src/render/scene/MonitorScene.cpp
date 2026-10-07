@@ -3,6 +3,7 @@
 #include "../Renderer.hpp"
 #include "../../event/EventBus.hpp"
 #include "../../output/Monitor.hpp"
+#include "../../managers/SessionLockManager.hpp"
 
 using namespace Render;
 
@@ -15,7 +16,7 @@ void CMonitorScene::draw(CRenderContext& ctx, const Time::steady_tp& now) {
     if (!MONITOR)
         return;
 
-    if (MONITOR->isMirror()) {
+    if (MONITOR->isMirror() && !g_pSessionLockManager->isSessionLocked()) {
         g_pHyprRenderer->blend(false);
         g_pHyprRenderer->renderMirrored(ctx);
         g_pHyprRenderer->blend(true);

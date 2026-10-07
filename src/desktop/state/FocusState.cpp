@@ -98,6 +98,8 @@ void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWL
 }
 
 void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface) {
+    if (pWindow && g_pSeatDesktopRegistry->isPrivateOutput(pWindow->m_monitor.lock()))
+        return;
     static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PSPECIALFALLTHROUGH = CConfigValue<Config::INTEGER>("input:special_fallthrough");
 
@@ -270,6 +272,8 @@ void CFocusState::rawSurfaceFocus(SP<CWLSurfaceResource> pSurface, PHLWINDOW pWi
 }
 
 void CFocusState::rawMonitorFocus(PHLMONITOR pMonitor) {
+    if (g_pSeatDesktopRegistry->isPrivateOutput(pMonitor))
+        return;
     if (m_focusMonitor == pMonitor)
         return;
 

@@ -123,7 +123,8 @@ void CPointerConstraint::deactivate() {
 }
 
 void CPointerConstraint::activate() {
-    if (m_dead || m_active || !m_hlSurface || g_pSessionLockManager->isSessionLocked() || (manager()->m_desktop && !manager()->m_desktop->active()))
+    if (m_dead || m_active || !m_hlSurface || (g_pSessionLockManager->isSessionLocked() && (!manager()->m_desktop || !manager()->m_desktop->inputAllowed())) ||
+        (manager()->m_desktop && !manager()->m_desktop->active()))
         return;
 
     // TODO: hack, probably not a super duper great idea
