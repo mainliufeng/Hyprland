@@ -4,6 +4,7 @@
 #include "../../devices/IKeyboard.hpp"
 #include "../../devices/IHID.hpp"
 #include "../../managers/SeatManager.hpp"
+#include "../../managers/SeatDesktop.hpp"
 #include "../../helpers/time/Time.hpp"
 #include "../../config/ConfigValue.hpp"
 #include <algorithm>
@@ -584,6 +585,11 @@ void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, u
     LOG(Log::DEBUG, "New seat resource bound at {:x}", (uintptr_t)RESOURCE.get());
 
     m_events.newSeatResource.emit(RESOURCE);
+    if (g_pSeatDesktopRegistry) {
+        const auto preferred = g_pSeatDesktopRegistry->forClient(client);
+        if (preferred && preferred->protocol() == this)
+            preferred->announceSharedSeats(client);
+    }
 }
 
 void CWLSeatProtocol::destroyResource(CWLSeatResource* seat) {

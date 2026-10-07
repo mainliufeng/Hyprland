@@ -179,6 +179,8 @@ misc={disable_hyprland_logo=true, disable_splash_rendering=true, force_default_w
     for env in (ENV, agents[0][1]):
         registry = subprocess.check_output([str(BASE / 'registry')], env=env, text=True)
         assert all('seat_name=' + name in registry for name in ('Hyprland', 'agent1', 'agent2', 'agent3')), registry
+        first_seat = next(line for line in registry.splitlines() if line.startswith('seat_name='))
+        assert first_seat == ('seat_name=Hyprland' if env is ENV else 'seat_name=agent1'), registry
     record('shared seat globals', 'primary and agent socket clients bind all seats')
     def many_type(driver, character):
         for i in range(20):

@@ -25,6 +25,7 @@ namespace Layout::Supplementary {
 struct wl_global;
 struct wl_client;
 struct wl_event_source;
+struct SSeatInputClient;
 namespace Desktop::View {
     class CWLSurface;
 }
@@ -51,9 +52,17 @@ class CSeatDesktop {
     PHLWINDOW                                    window() const;
     bool                                         active() const;
     bool                                         inputAllowed() const;
+    bool                                         viewAvailable() const;
+    bool                                         paused() const;
+    uint64_t                                     controlGeneration() const;
+    void                                         setPaused(bool paused);
     void                                         retire();
     const std::string&                           socketName() const;
     bool                                         ownsClient(const wl_client* client) const;
+    bool                                         allowsInputSource(wl_client* client);
+    bool                                         preferredSeatBound(const wl_client* client) const;
+    void                                         announceSharedSeats(wl_client* client);
+    void                                         forgetInputClient(wl_client* client);
     Layout::Supplementary::CDragStateController* dragController() const;
     void                                         setCursorShape(const std::string& name);
 
@@ -85,7 +94,12 @@ class CSeatDesktop {
     PHLMONITORREF                                        m_monitor;
     PHLWORKSPACE                                         m_workspace;
     PHLWINDOWREF                                         m_window;
-    bool                                                 m_active = true;
+    bool                                                 m_active            = true;
+    bool                                                 m_paused            = false;
+    bool                                                 m_managedControl    = false;
+    uint64_t                                             m_controlGeneration = 1;
+    std::unordered_map<IHID*, uint64_t>                  m_deviceGenerations;
+    std::unordered_map<wl_client*, UP<SSeatInputClient>> m_inputClients;
     Hyprutils::OS::CFileDescriptor                       m_socketFd;
     wl_event_source*                                     m_socketSource = nullptr;
     std::string                                          m_socketName;
@@ -109,17 +123,21 @@ class CSeatDesktopRegistry {
     CSeatDesktop*                        forManager(CSeatManager* manager) const;
     CSeatDesktop*                        forClient(const wl_client* client) const;
     bool                                 allowsGlobal(const wl_client* client, const wl_global* global) const;
+    void                                 refreshWorkspace(PHLWORKSPACE workspace);
     bool                                 isSeatGlobal(const wl_global* global) const;
     bool                                 usesWorkspace(PHLWORKSPACE workspace) const;
     bool                                 focusesWindow(PHLWINDOW window) const;
     const std::vector<UP<CSeatDesktop>>& seats() const;
+    std::string                          windowIdentity(PHLWINDOW window);
 
   private:
     // Retain retired seats until their socket clients disconnect: Wayland
     // children may outlive wl_seat and removal of a registry global.
-    void                          collectRetired();
-    std::vector<UP<CSeatDesktop>> m_seats;
-    SP<CEventLoopTimer>           m_frameTimer;
+    void                                                            collectRetired();
+    std::vector<UP<CSeatDesktop>>                                   m_seats;
+    SP<CEventLoopTimer>                                             m_frameTimer;
+    uint64_t                                                        m_nextWindowIdentity = 0;
+    std::unordered_map<void*, std::pair<PHLWINDOWREF, std::string>> m_windowIdentities;
 };
 
 inline UP<CSeatDesktopRegistry> g_pSeatDesktopRegistry;

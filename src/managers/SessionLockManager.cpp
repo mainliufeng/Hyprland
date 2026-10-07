@@ -10,6 +10,7 @@
 #include "../managers/input/InputManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../state/MonitorState.hpp"
+#include "../ipc/s2/S2.hpp"
 #include <algorithm>
 #include <ranges>
 
@@ -95,6 +96,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
             g_pHyprRenderer->damageMonitor(m);
     });
 
+    IPC::Socket2::sock()->postEvent({"sessionlock", "locked"});
     m_events.lock.emit();
 
     Desktop::focusState()->rawSurfaceFocus(nullptr);

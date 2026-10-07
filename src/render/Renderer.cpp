@@ -12,6 +12,9 @@
 #include <cstring>
 #include <drm_mode.h>
 #include <filesystem>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "../config/ConfigValue.hpp"
 #include "../config/ConfigManager.hpp"
 #include "../pointer/cursor/CursorManager.hpp"
@@ -3361,13 +3364,13 @@ class CSeatCaptureBuffer : public IHLBuffer {
     std::vector<uint8_t> pixels;
 };
 
-std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path) {
+std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path, bool raw) {
     if (g_pSessionLockManager->isSessionLocked())
         return "session is locked";
     if (m_context.active())
         return "renderer is busy";
     const auto monitor = workspace ? workspace->m_monitor.lock() : nullptr;
-    if (!monitor || !monitor->m_enabled || !monitor->m_dpmsStatus || (seat && !seat->inputAllowed()))
+    if (!monitor || !monitor->m_enabled || !monitor->m_dpmsStatus || (seat && !seat->viewAvailable()))
         return "seat view is unavailable";
     if (!std::filesystem::path(path).is_absolute())
         return "capture path must be absolute";
@@ -3392,22 +3395,47 @@ std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDes
     startRenderPass(m_context);
     const auto now = Time::steadyNow();
     renderWorkspace(m_context, workspace, now, eSceneMode::WORKSPACE_WINDOWS);
-    if (seat)
+    const bool cursorVisible = !seat || seat->workspace() == workspace;
+    if (seat && cursorVisible)
         renderDragIcon(m_context, monitor, now);
     const auto relay = seat ? seat->relay() : &g_pInputManager->m_relay;
     for (const auto& popup : relay->popups()) {
-        if (popup->shouldBeRendered())
+        if (cursorVisible && popup->shouldBeRendered())
             renderIMEPopup(m_context, popup.get(), monitor, now);
     }
-    if (seat)
+    if (seat && cursorVisible)
         seat->pointer()->renderSoftwareCursorsFor(m_context, monitor, now, damage, std::nullopt, true, true);
-    else
+    else if (!seat)
         Pointer::mgr()->renderSoftwareCursorsFor(m_context, monitor, now, damage, std::nullopt, true, true);
     finishing = true;
     endRender();
     auto buffer = makeShared<CSeatCaptureBuffer>(dimensions);
     if (!framebuffer->readPixels(CHLBufferReference{buffer}))
         return "capture readback failed";
+    // Only observed hidden workspaces need additional frame callbacks. This
+    // also releases FIFO/suspended clients on a ws without any active seat view.
+    if (g_pSeatDesktopRegistry)
+        g_pSeatDesktopRegistry->refreshWorkspace(workspace);
+    if (raw) {
+        // Acknowledgement follows the complete write. The consumer owns this
+        // regular runtime buffer and must not reuse it before copying the frame.
+        Hyprutils::OS::CFileDescriptor fd{open(path.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW)};
+        struct stat                    info = {};
+        if (!fd.isValid() || fstat(fd.get(), &info) < 0 || !S_ISREG(info.st_mode) || info.st_uid != getuid() || (info.st_mode & 0077))
+            return "raw capture requires a private regular buffer owned by this user";
+        if (ftruncate(fd.get(), buffer->pixels.size()) < 0)
+            return "raw capture resize failed";
+        size_t offset = 0;
+        while (offset < buffer->pixels.size()) {
+            const auto written = pwrite(fd.get(), buffer->pixels.data() + offset, buffer->pixels.size() - offset, offset);
+            if (written < 0 && errno == EINTR)
+                continue;
+            if (written <= 0)
+                return "raw capture write failed";
+            offset += written;
+        }
+        return "ok";
+    }
     // RPT_EXPORT projects into readback order, so the first CPU row is the top.
     const size_t stride = static_cast<size_t>(dimensions.x) * 4;
     auto         image  = cairo_image_surface_create_for_data(buffer->pixels.data(), CAIRO_FORMAT_ARGB32, dimensions.x, dimensions.y, stride);

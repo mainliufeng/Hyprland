@@ -166,6 +166,11 @@ void CVirtualPointerProtocol::onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr
         wl_client_post_implementation_error(pMgr->client(), "invalid virtual pointer seat");
         return;
     }
+    const auto desktop = requestedSeat ? requestedSeat->manager()->m_desktop : g_pSeatDesktopRegistry->forClient(pMgr->client());
+    if (desktop && !desktop->allowsInputSource(pMgr->client())) {
+        wl_client_post_implementation_error(pMgr->client(), "seat input source revoked");
+        return;
+    }
     const auto RESOURCE =
         m_pointers.emplace_back(makeShared<CVirtualPointerV1Resource>(makeShared<CZwlrVirtualPointerV1>(pMgr->client(), pMgr->version(), id), output, requestedSeat));
 

@@ -7,6 +7,8 @@
 #include "../../desktop/view/window/WindowSwallowController.hpp"
 #include "../../output/Monitor.hpp"
 #include "../../pointer/PointerManager.hpp"
+#include "../../desktop/state/WindowState.hpp"
+#include "../../helpers/time/Time.hpp"
 #include "workspace/AbstractWorkspace.hpp"
 
 #include <algorithm>
@@ -1958,8 +1960,95 @@ static std::string reloadShaders(eHyprCtlOutputFormat format, std::string reques
         return format == FORMAT_JSON ? "{\"ok\": false}" : "error";
 }
 
+static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
+    const auto output = view ? view->m_monitor.lock() : seat->monitor();
+    if (!view)
+        view = seat->workspace();
+    if (!output || !view)
+        return "seat view is unavailable";
+    const auto cursor = seat->pointer()->position();
+    return std::format("{{\"name\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\",\"paused\":{},\"available\":{},"
+                       "\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
+                       "\"windowId\":\"{}\",\"window\":\"{}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
+                       "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
+                       escapeJSONStrings(seat->protocol()->seatName()), escapeJSONStrings(seat->socketName()), seat->controlGeneration(), seat->paused(), seat->viewAvailable(),
+                       escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()), escapeJSONStrings(seat->workspace()->addressableName()),
+                       escapeJSONStrings(view->addressableName()), g_pSeatDesktopRegistry->windowIdentity(seat->window()),
+                       seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "", cursor.x, cursor.y, view == seat->workspace(), output->m_position.x,
+                       output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x, output->m_transformedSize.y, output->m_scale,
+                       static_cast<int>(output->m_transform));
+}
+
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
+    if (args.size() == 2 && args[1] == "capabilities")
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause"]})";
+    if (args.size() == 3 && args[1] == "state") {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        return seat ? seatState(seat) : "seat not found";
+    }
+    if (args.size() >= 6 && (args[1] == "control" || args[1] == "act")) {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        if (!seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4])
+            return "stale seat identity or control generation";
+        if (args[1] == "control" && args.size() == 6 && (args[5] == "pause" || args[5] == "resume")) {
+            if (args[5] == "resume" && !seat->viewAvailable())
+                return "seat view is unavailable";
+            seat->setPaused(args[5] == "pause");
+            return seatState(seat);
+        }
+        if (!seat->inputAllowed())
+            return "seat input is paused or unavailable";
+        if (args[5] == "workspace" && args.size() == 7)
+            return seat->switchWorkspace(args[6]);
+        if (args[5] == "focus" && args.size() == 7) {
+            for (const auto& window : Desktop::windowState()->windows()) {
+                if (window->m_workspace == seat->workspace() && g_pSeatDesktopRegistry->windowIdentity(window) == args[6]) {
+                    seat->focusWindow(window);
+                    return seat->window() == window ? "ok" : "window cannot receive seat focus";
+                }
+            }
+            return "window identity not found in seat workspace";
+        }
+        return "invalid seat action";
+    }
+    if (args.size() == 7 && args[1] == "snapshot") {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        if (!seat || seat->socketName() != args[3])
+            return "stale seat identity";
+        const auto view = args[4] == "current" ? seat->workspace() : State::workspaceState()->query().input(args[4]).run();
+        if (!view)
+            return "observed workspace does not exist";
+        if (args[5] != "png" && args[5] != "argb")
+            return "unsupported capture format";
+        // The compositor thread renders and serializes metadata in one request.
+        // Existing-workspace observation never calls switchWorkspace or focus.
+        const auto result = g_pHyprRenderer->captureSeatWorkspace(view, seat, args[6], args[5] == "argb");
+        if (result != "ok")
+            return result;
+        static uint64_t nextFrame = 0;
+        auto            metadata  = seatState(seat, view);
+        metadata.pop_back();
+        return metadata +
+            std::format(",\"frameId\":\"{}\",\"timestampNs\":\"{}\",\"format\":\"{}\"}}", ++nextFrame,
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(Time::steadyNow().time_since_epoch()).count(), args[5]);
+    }
+    if (args.size() == 3 && args[1] == "windows") {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        if (!seat)
+            return "seat not found";
+        std::string result = "[";
+        for (const auto& window : Desktop::windowState()->windows()) {
+            if (window->m_workspace != seat->workspace() || !window->mapped() || window->isHidden())
+                continue;
+            if (result.size() > 1)
+                result += ",";
+            result += std::format("{{\"id\":\"{}\",\"title\":\"{}\",\"address\":\"0x{:x}\"}}", g_pSeatDesktopRegistry->windowIdentity(window),
+                                  escapeJSONStrings(window->metadata().title()), reinterpret_cast<uintptr_t>(window.get()));
+        }
+        return result + "]";
+    }
+
     if (args.size() == 1 || args[1] == "list") {
         std::string result = format == FORMAT_JSON ? "[" : "";
         bool        first  = true;

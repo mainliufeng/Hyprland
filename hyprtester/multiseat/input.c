@@ -114,6 +114,10 @@ int main(int argc, char** argv) {
         else if (!strcmp(line, "release-seat")) {
             wl_seat_release(seat);
             seat = NULL;
+        } else if (!strcmp(line, "new-pointer")) {
+            zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(pointer_manager, seat, output);
+        } else if (!strcmp(line, "new-keyboard")) {
+            zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keyboard_manager, seat);
         } else if (!strncmp(line, "type ", 5)) {
             for (const unsigned char* ch = (const unsigned char*)line + 5; *ch; ++ch) {
                 int found = 0;

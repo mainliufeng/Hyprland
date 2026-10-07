@@ -11,6 +11,9 @@ seat，agent 使用命名 seat；seat 数量没有写死为两个。
 不会调用物理输出的 `changeWorkspace`。隐藏工作区接收真实 Wayland 输入，
 有 30 Hz 的 frame callback/FIFO 更新调度，按需渲染为截图；没有创建私有虚拟输出。
 
+特性分支 `codex/cornice-agent-desktop` 已增加结构化截图、只读帧导出与受管理输入暂停。
+接口与边界见 [cornice 桌面对接](cornice-desktop-api.md)。
+
 Fork: <https://github.com/mainliufeng/Hyprland>。
 上游基础：`5a78b5e927345860a27e2893bf894f97ee620c48`。
 
@@ -117,7 +120,11 @@ env WAYLAND_DISPLAY="$agent_display" wl-paste --seat agent1
 - 多 seat 不是安全沙箱。文件、进程、应用/文档数据、窗口布局和 ws 集合共享。
   同一个应用的文本插入位置、选区、拖动和文档修改仍可能相互影响。
   Prompt 可以要求 agent 留在 ws10，但本版本不设置工作区 ACL。
-- 人的只读跟随、自由只读浏览和接管模式仍是后续功能，不能把当前 ws 切换当作只读观察。
+- `codex/cornice-agent-desktop` 的帧接口供 cornice 只读跟随/浏览；这些读取不切换任何
+  seat 的实际 ws。人的物理输入接管尚未实现，暂停不等于接管。
+- Chrome 的 Wayland backend 只使用一个 seat。agent socket 优先公布自己的 seat，
+  绑定后再公布其他共享 seats；Chrome 可接受其目标 seat 的输入，但不能承诺另一
+  seat 也能输入同一个 Chrome 窗口。GTK 3 的共享窗口多 seat 输入已实测。
 
 ## 生命周期
 

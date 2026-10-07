@@ -25,6 +25,9 @@ int         main() {
     wl_registry_add_listener(r, &l, NULL);
     wl_display_roundtrip(d);
     wl_display_roundtrip(d);
+    // The socket's preferred seat is announced first. Binding it advertises
+    // the shared seats; this roundtrip receives those newly bound seat names.
+    wl_display_roundtrip(d);
     wl_display_disconnect(d);
     return 0;
 }

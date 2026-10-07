@@ -1,5 +1,6 @@
 #include "core/Seat.hpp"
 #include "../managers/SeatManager.hpp"
+#include "../managers/SeatDesktop.hpp"
 #include "VirtualKeyboard.hpp"
 #include <filesystem>
 #include <sys/mman.h>
@@ -168,6 +169,10 @@ void CVirtualKeyboardProtocol::onCreateKeeb(CZwpVirtualKeyboardManagerV1* pMgr, 
     const auto requestedSeat = CWLSeatResource::fromResource(seat);
     if (!requestedSeat) {
         wl_client_post_implementation_error(pMgr->client(), "invalid virtual keyboard seat");
+        return;
+    }
+    if (auto desktop = requestedSeat->manager()->m_desktop; desktop && !desktop->allowsInputSource(pMgr->client())) {
+        wl_client_post_implementation_error(pMgr->client(), "seat input source revoked");
         return;
     }
     const auto RESOURCE = m_keyboards.emplace_back(makeShared<CVirtualKeyboardV1Resource>(makeShared<CZwpVirtualKeyboardV1>(pMgr->client(), pMgr->version(), id), requestedSeat));

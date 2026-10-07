@@ -49,6 +49,19 @@
 #include "eventLoop/EventLoopTimer.hpp"
 #include "../render/Renderer.hpp"
 #include "../desktop/view/GlobalViewMethods.hpp"
+#include "../ipc/s2/S2.hpp"
+
+struct SSeatInputClient {
+    wl_listener   destroy;
+    CSeatDesktop* seat       = nullptr;
+    wl_client*    client     = nullptr;
+    uint64_t      generation = 0;
+    bool          preferred  = false;
+
+    ~SSeatInputClient() {
+        wl_list_remove(&destroy.link);
+    }
+};
 
 CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_monitor(monitor), m_workspace(monitor->m_activeWorkspace) {
     m_protocol           = makeUnique<CWLSeatProtocol>(&wl_seat_interface, 9, "WLSeat-" + name, name);
@@ -89,6 +102,7 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_pointer->setCursorBuffer(buffer, image.hotspot / m_monitor->m_scale, m_monitor->m_scale);
     }));
     m_listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] {
+        setPaused(true);
         m_dragController->dragEnd();
         PROTO::data->abortDndIfPresent(m_manager.get());
         m_manager->setGrab(nullptr);
@@ -140,6 +154,7 @@ CSeatDesktop::~CSeatDesktop() {
         std::error_code error;
         std::filesystem::remove(m_socketPath, error);
     }
+    m_inputClients.clear();
     m_listeners.clear();
     m_keyboards.clear();
     m_pointers.clear();
@@ -184,7 +199,43 @@ const std::vector<SP<IKeyboard>>& CSeatDesktop::keyboards() const {
 }
 
 bool CSeatDesktop::inputAllowed() const {
+    return !m_paused && viewAvailable();
+}
+
+bool CSeatDesktop::viewAvailable() const {
     return m_active && m_monitor && m_monitor->m_enabled && m_monitor->m_dpmsStatus && !g_pSessionLockManager->isSessionLocked();
+}
+
+bool CSeatDesktop::paused() const {
+    return m_paused;
+}
+
+uint64_t CSeatDesktop::controlGeneration() const {
+    return m_controlGeneration;
+}
+
+void CSeatDesktop::setPaused(bool paused) {
+    m_managedControl = true;
+    // Every transition revokes existing virtual devices, including devices
+    // that remained connected across pause/resume or a session lock.
+    m_dragController->dragEnd();
+    PROTO::data->abortDndIfPresent(m_manager.get());
+    m_manager->setGrab(nullptr);
+    const auto time = Time::millis(Time::steadyNow());
+    for (const auto key : pressedKeys())
+        m_manager->sendKeyboardKey(time, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+    m_manager->sendKeyboardMods(0, 0, 0, 0);
+    for (const auto code : m_buttons)
+        m_manager->sendPointerButton(time, code, WL_POINTER_BUTTON_STATE_RELEASED);
+    m_manager->sendPointerFrame();
+    m_buttons.clear();
+    m_deviceButtons.clear();
+    focusWindow(nullptr);
+    m_manager->setKeyboardFocus(nullptr);
+    m_manager->setPointerFocus(nullptr, {});
+    ++m_controlGeneration;
+    m_paused = paused;
+    IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("{},{},{}", protocol()->seatName(), m_controlGeneration, m_paused ? "paused" : "active")});
 }
 
 Layout::Supplementary::CDragStateController* CSeatDesktop::dragController() const {
@@ -243,11 +294,13 @@ void CSeatDesktop::attachKeyboard(SP<IKeyboard> keyboard) {
     if (!m_active || !keyboard)
         return;
     m_keyboards.emplace_back(keyboard);
-    keyboard->m_hlName = protocol()->seatName() + ":" + keyboard->m_deviceName;
+    m_deviceGenerations[keyboard.get()] = m_controlGeneration;
+    keyboard->m_hlName                  = protocol()->seatName() + ":" + keyboard->m_deviceName;
     g_pInputManager->applyConfigToKeyboard(keyboard);
     m_listeners.emplace_back(keyboard->m_events.destroy.listen([this, device = keyboard.get()] {
         auto keepAlive = device->m_self.lock();
         m_manager->m_keyboardEventHandlers.onKeyboardRemoved(keepAlive);
+        m_deviceGenerations.erase(device);
         std::erase_if(m_keyboards, [device](const auto& other) { return other.get() == device; });
         if (m_manager->m_keyboard == keepAlive) {
             if (m_keyboards.empty())
@@ -255,6 +308,9 @@ void CSeatDesktop::attachKeyboard(SP<IKeyboard> keyboard) {
             m_manager->setKeyboard(m_keyboards.empty() ? nullptr : m_keyboards.back());
         }
         updateCapabilities();
+        if (m_active && m_managedControl && !m_paused &&
+            std::ranges::none_of(m_keyboards, [this](const auto& keyboard) { return m_deviceGenerations[keyboard.get()] == m_controlGeneration; }))
+            setPaused(true);
     }));
     m_listeners.emplace_back(keyboard->m_keyboardEvents.key.listen([this, device = WP<IKeyboard>{keyboard}](const auto& event) {
         if (device)
@@ -265,7 +321,7 @@ void CSeatDesktop::attachKeyboard(SP<IKeyboard> keyboard) {
             keyboardModifiers(device.lock());
     }));
     m_listeners.emplace_back(keyboard->m_keyboardEvents.keymap.listen([this, device = WP<IKeyboard>{keyboard}](const auto&) {
-        if (device && m_manager->m_keyboard == device)
+        if (device && m_deviceGenerations[device.get()] == m_controlGeneration && m_manager->m_keyboard == device)
             m_manager->updateActiveKeyboardData();
     }));
     updateCapabilities();
@@ -277,24 +333,41 @@ void CSeatDesktop::attachPointer(SP<IPointer> pointer) {
     if (!m_active || !pointer)
         return;
     m_pointers.emplace_back(pointer);
-    pointer->m_hlName = protocol()->seatName() + ":" + pointer->m_deviceName;
+    m_deviceGenerations[pointer.get()] = m_controlGeneration;
+    pointer->m_hlName                  = protocol()->seatName() + ":" + pointer->m_deviceName;
     m_listeners.emplace_back(pointer->m_events.destroy.listen([this, device = pointer.get()] {
         auto       keepAlive = device->m_self.lock();
         const auto owned     = m_deviceButtons[device];
         for (const auto code : owned)
             button(IPointer::SButtonEvent{.timeMs = Time::millis(Time::steadyNow()), .button = code, .state = WL_POINTER_BUTTON_STATE_RELEASED}, device);
         m_deviceButtons.erase(device);
+        m_deviceGenerations.erase(device);
         std::erase_if(m_pointers, [device](const auto& other) { return other.get() == device; });
         if (m_manager->m_mouse == keepAlive)
             m_manager->setMouse(m_pointers.empty() ? nullptr : m_pointers.back());
         if (m_pointers.empty())
             m_manager->setPointerFocus(nullptr, {});
         updateCapabilities();
+        if (m_active && m_managedControl && !m_paused &&
+            std::ranges::none_of(m_pointers, [this](const auto& pointer) { return m_deviceGenerations[pointer.get()] == m_controlGeneration; }))
+            setPaused(true);
     }));
-    m_listeners.emplace_back(pointer->m_pointerEvents.motion.listen([this](const auto& event) { move(event); }));
-    m_listeners.emplace_back(pointer->m_pointerEvents.motionAbsolute.listen([this](const auto& event) { warp(event); }));
-    m_listeners.emplace_back(pointer->m_pointerEvents.button.listen([this, device = pointer.get()](const auto& event) { button(event, device); }));
-    m_listeners.emplace_back(pointer->m_pointerEvents.axis.listen([this](const auto& event) { axis(event); }));
+    m_listeners.emplace_back(pointer->m_pointerEvents.motion.listen([this, device = pointer.get()](const auto& event) {
+        if (m_deviceGenerations[device] == m_controlGeneration)
+            move(event);
+    }));
+    m_listeners.emplace_back(pointer->m_pointerEvents.motionAbsolute.listen([this, device = pointer.get()](const auto& event) {
+        if (m_deviceGenerations[device] == m_controlGeneration)
+            warp(event);
+    }));
+    m_listeners.emplace_back(pointer->m_pointerEvents.button.listen([this, device = pointer.get()](const auto& event) {
+        if (m_deviceGenerations[device] == m_controlGeneration)
+            button(event, device);
+    }));
+    m_listeners.emplace_back(pointer->m_pointerEvents.axis.listen([this, device = pointer.get()](const auto& event) {
+        if (m_deviceGenerations[device] == m_controlGeneration)
+            axis(event);
+    }));
     m_listeners.emplace_back(pointer->m_pointerEvents.frame.listen([this] {
         if (inputAllowed())
             m_manager->sendPointerFrame();
@@ -307,7 +380,7 @@ void CSeatDesktop::attachPointer(SP<IPointer> pointer) {
 std::vector<uint32_t> CSeatDesktop::pressedKeys() const {
     std::vector<uint32_t> keys;
     for (const auto& keyboard : m_keyboards) {
-        if (!keyboard->m_enabled || !keyboard->m_allowed)
+        if (m_deviceGenerations.at(keyboard.get()) != m_controlGeneration || !keyboard->m_enabled || !keyboard->m_allowed)
             continue;
         for (const auto key : keyboard->pressedKeys()) {
             if (std::ranges::find(keys, key) == keys.end())
@@ -318,7 +391,7 @@ std::vector<uint32_t> CSeatDesktop::pressedKeys() const {
 }
 
 void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard) {
-    if (!inputAllowed() || !keyboard->m_enabled || !keyboard->m_allowed)
+    if (!inputAllowed() || m_deviceGenerations[keyboard.get()] != m_controlGeneration || !keyboard->m_enabled || !keyboard->m_allowed)
         return;
     if (m_window && (m_window->m_workspace != workspace() || !m_window->mapped() || !m_window->acceptsInput())) {
         focusWindow(nullptr);
@@ -343,14 +416,14 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
 }
 
 void CSeatDesktop::keyboardModifiers(SP<IKeyboard> keyboard) {
-    if (!inputAllowed() || !keyboard->m_enabled || !keyboard->m_allowed)
+    if (!inputAllowed() || m_deviceGenerations[keyboard.get()] != m_controlGeneration || !keyboard->m_enabled || !keyboard->m_allowed)
         return;
     m_manager->setKeyboard(keyboard);
     uint32_t depressed = keyboard->m_modifiersState.depressed;
     uint32_t latched   = keyboard->m_modifiersState.latched;
     uint32_t locked    = keyboard->m_modifiersState.locked;
     for (const auto& other : m_keyboards) {
-        if (!other->m_enabled || !other->m_allowed || !other->shareStates())
+        if (m_deviceGenerations[other.get()] != m_controlGeneration || !other->m_enabled || !other->m_allowed || !other->shareStates())
             continue;
         depressed |= other->m_modifiersState.depressed;
         latched |= other->m_modifiersState.latched;
@@ -569,6 +642,28 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name) {
     return "ok";
 }
 
+void CSeatDesktopRegistry::refreshWorkspace(PHLWORKSPACE workspace) {
+    if (!workspace || workspace->visible() || g_pSessionLockManager->isSessionLocked())
+        return;
+    const auto now  = Time::steadyNow();
+    auto       tick = [&now](SP<CWLSurfaceResource> surface) {
+        if (!surface || !surface->m_mapped)
+            return;
+        // Hidden views have no output presentation to release FIFO commits.
+        // Acquire fences remain enforced by the surface state queue.
+        surface->m_stateQueue.unlockFirst(LOCK_REASON_FIFO | LOCK_REASON_TIMER);
+        surface->frame(now);
+    };
+    for (const auto& window : Desktop::windowState()->windows()) {
+        if (!window->mapped() || window->isHidden() || window->m_workspace != workspace || !window->wlSurface()->resource())
+            continue;
+        window->setSuspended(false);
+        window->wlSurface()->resource()->breadthfirst([&tick](SP<CWLSurfaceResource> surface, const auto&, void*) { tick(surface); }, nullptr);
+        if (window->popupHead())
+            window->popupHead()->breadthfirst([&tick](SP<Desktop::View::CPopup> popup, void*) { tick(popup->resource()); }, nullptr);
+    }
+}
+
 CSeatDesktopRegistry::CSeatDesktopRegistry() {
     m_frameTimer = makeShared<CEventLoopTimer>(
         std::nullopt,
@@ -577,26 +672,10 @@ CSeatDesktopRegistry::CSeatDesktopRegistry() {
                 std::vector<PHLWORKSPACE> updated;
                 for (const auto& seat : m_seats) {
                     const auto current = seat->workspace();
-                    if (!seat->inputAllowed() || !current || current->visible() || std::ranges::find(updated, current) != updated.end())
+                    if (!seat->viewAvailable() || !current || current->visible() || std::ranges::find(updated, current) != updated.end())
                         continue;
                     updated.emplace_back(current);
-                    const auto now  = Time::steadyNow();
-                    auto       tick = [&now](SP<CWLSurfaceResource> surface) {
-                        if (!surface || !surface->m_mapped)
-                            return;
-                        // Hidden views have no output presentation to release FIFO commits.
-                        // Acquire fences remain enforced by the surface state queue.
-                        surface->m_stateQueue.unlockFirst(LOCK_REASON_FIFO | LOCK_REASON_TIMER);
-                        surface->frame(now);
-                    };
-                    for (const auto& window : Desktop::windowState()->windows()) {
-                        if (!window->mapped() || window->isHidden() || window->m_workspace != current || !window->wlSurface()->resource())
-                            continue;
-                        window->setSuspended(false);
-                        window->wlSurface()->resource()->breadthfirst([&tick](SP<CWLSurfaceResource> surface, const auto&, void*) { tick(surface); }, nullptr);
-                        if (window->popupHead())
-                            window->popupHead()->breadthfirst([&tick](SP<Desktop::View::CPopup> popup, void*) { tick(popup->resource()); }, nullptr);
-                    }
+                    refreshWorkspace(current);
                 }
             }
             if (std::ranges::any_of(m_seats, [](const auto& seat) { return seat->active(); }))
@@ -658,6 +737,8 @@ CSeatDesktop* CSeatDesktopRegistry::forManager(CSeatManager* manager) const {
     return nullptr;
 }
 bool CSeatDesktopRegistry::isSeatGlobal(const wl_global* global) const {
+    if (g_pSeatManager && g_pSeatManager->protocol()->getGlobal() == global)
+        return true;
     for (const auto& seat : m_seats) {
         if (seat->protocol()->getGlobal() == global)
             return true;
@@ -705,9 +786,10 @@ CSeatDesktop* CSeatDesktopRegistry::forClient(const wl_client* client) const {
 }
 
 bool CSeatDesktopRegistry::allowsGlobal(const wl_client* client, const wl_global* global) const {
-    // Applications may receive input from any live seat. Socket identity is a launch
-    // and virtual-input default, not ownership of windows or protocol resources.
-    return true;
+    // Advertise the socket's preferred seat first for single-seat clients such
+    // as Chromium. Binding it reveals all shared seats; this never owns windows.
+    const auto preferred = forClient(client);
+    return !preferred || !isSeatGlobal(global) || preferred->protocol()->getGlobal() == global || preferred->preferredSeatBound(client);
 }
 
 void CSeatDesktopRegistry::collectRetired() {
@@ -721,4 +803,80 @@ void CSeatDesktopRegistry::collectRetired() {
         }
         return true;
     });
+}
+
+std::string CSeatDesktopRegistry::windowIdentity(PHLWINDOW window) {
+    if (!window)
+        return "";
+    std::erase_if(m_windowIdentities, [](const auto& item) { return !item.second.first; });
+    auto& entry = m_windowIdentities[window.get()];
+    if (!entry.first) {
+        entry.first  = window;
+        entry.second = std::format("window-{}", ++m_nextWindowIdentity);
+    }
+    return entry.second;
+}
+
+void CSeatDesktop::forgetInputClient(wl_client* client) {
+    m_inputClients.erase(client);
+}
+
+bool CSeatDesktop::preferredSeatBound(const wl_client* client) const {
+    const auto it = m_inputClients.find(cc<wl_client*>(client));
+    return it != m_inputClients.end() && it->second->preferred;
+}
+
+bool CSeatDesktop::allowsInputSource(wl_client* client) {
+    auto& source = m_inputClients[client];
+    if (!source) {
+        source                 = makeUnique<SSeatInputClient>();
+        source->seat           = this;
+        source->client         = client;
+        source->destroy.notify = [](wl_listener* listener, void*) {
+            const auto registration = rc<SSeatInputClient*>(listener);
+            registration->seat->forgetInputClient(registration->client);
+        };
+        wl_client_add_destroy_listener(client, &source->destroy);
+    }
+    if (!source->generation)
+        source->generation = m_controlGeneration;
+    return m_active && (!m_managedControl || (!m_paused && source->generation == m_controlGeneration));
+}
+
+void CSeatDesktop::announceSharedSeats(wl_client* client) {
+    // Create the lifecycle registration without granting an input generation.
+    auto& source = m_inputClients[client];
+    if (!source) {
+        source                 = makeUnique<SSeatInputClient>();
+        source->seat           = this;
+        source->client         = client;
+        source->destroy.notify = [](wl_listener* listener, void*) {
+            const auto registration = rc<SSeatInputClient*>(listener);
+            registration->seat->forgetInputClient(registration->client);
+        };
+        wl_client_add_destroy_listener(client, &source->destroy);
+    }
+    if (source->preferred)
+        return;
+    source->preferred = true;
+    wl_client_for_each_resource(
+        client,
+        [](wl_resource* resource, void* data) {
+            if (std::string_view(wl_resource_get_class(resource)) != "wl_registry")
+                return WL_ITERATOR_CONTINUE;
+            const auto preferred = sc<CSeatDesktop*>(data);
+            const auto send      = [resource, preferred](CWLSeatProtocol* protocol) {
+                if (protocol == preferred->protocol() || !protocol->getGlobal())
+                    return;
+                const auto global = protocol->getGlobal();
+                wl_registry_send_global(resource, wl_global_get_name(global, wl_resource_get_client(resource)), "wl_seat", wl_global_get_version(global));
+            };
+            send(g_pSeatManager->protocol());
+            for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+                if (seat->active())
+                    send(seat->protocol());
+            }
+            return WL_ITERATOR_CONTINUE;
+        },
+        this);
 }
