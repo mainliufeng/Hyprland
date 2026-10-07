@@ -1,0 +1,120 @@
+[
+  {
+    "test": "private runtime",
+    "observed": {
+      "runtime": "/tmp/hms-uh320c98",
+      "no_drm": true,
+      "host_devices_disabled": 12
+    }
+  },
+  {
+    "test": "four seats share one output with independent workspace views",
+    "observed": {
+      "primary_unchanged": true,
+      "seats": [
+        {
+          "name": "agent1",
+          "output": "human",
+          "display": "seat-agent1-1",
+          "cursor": [
+            640,
+            400
+          ],
+          "workspace": "10",
+          "window": "agent1-window"
+        },
+        {
+          "name": "agent2",
+          "output": "human",
+          "display": "seat-agent2-2",
+          "cursor": [
+            640,
+            400
+          ],
+          "workspace": "11",
+          "window": "agent2-window"
+        },
+        {
+          "name": "agent3",
+          "output": "human",
+          "display": "seat-agent3-3",
+          "cursor": [
+            640,
+            400
+          ],
+          "workspace": "12",
+          "window": "agent3-window"
+        }
+      ]
+    }
+  },
+  {
+    "test": "shared seat globals",
+    "observed": "primary and agent socket clients bind all seats"
+  },
+  {
+    "test": "parallel real GTK input in hidden workspaces",
+    "observed": "all four exact text streams passed"
+  },
+  {
+    "test": "seat workspace capture",
+    "observed": {
+      "four_different_frames": true,
+      "primary_unchanged": true
+    }
+  },
+  {
+    "test": "shared native GTK window across socket origins",
+    "observed": {
+      "same_window_both_seats": "HUMANHHHHHHHHHHHHHHHHHHHHSHAREDALSO",
+      "primary_focus_unchanged": true
+    }
+  },
+  {
+    "test": "two independent real IME keyboard grabs",
+    "observed": "three keys per seat; no application or cross-seat delivery"
+  },
+  {
+    "test": "clipboard and primary selection",
+    "observed": "per-seat sources passed on shared output"
+  },
+  {
+    "test": "real GTK payload drag on hidden ws while human types",
+    "observed": "passed"
+  },
+  {
+    "test": "hidden workspace popup grab while human types",
+    "observed": {
+      "passed": true,
+      "capture_changed_bytes": 132489
+    }
+  },
+  {
+    "test": "cross-socket activation, pointer constraints and client move/resize",
+    "observed": "requesting agent seat preserved"
+  },
+  {
+    "test": "shared workspace client drag",
+    "observed": "human focus and workspace history unchanged"
+  },
+  {
+    "test": "native keyboard child survives wl_seat.release",
+    "observed": "serial routing retained"
+  },
+  {
+    "test": "session lock",
+    "observed": "agent input and capture blocked"
+  },
+  {
+    "test": "retirement with shared clients and live seat children",
+    "observed": "windows survive; stale input inert; primary functional"
+  },
+  {
+    "test": "upstream single-seat integration",
+    "observed": "passed"
+  },
+  {
+    "test": "result",
+    "observed": "passed"
+  }
+]

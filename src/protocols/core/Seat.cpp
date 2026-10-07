@@ -461,8 +461,8 @@ CWLSeatResource::CWLSeatResource(SP<CWlSeat> resource_, CWLSeatProtocol* protoco
         m_protocol->destroyResource(this);
     });
     m_resource->setRelease([this](CWlSeat* r) {
-        m_events.destroy.emit();
-        m_protocol->destroyResource(this);
+        // Destroy the protocol object now; child resources retain the logical seat.
+        wl_resource_destroy(r->resource());
     });
 
     m_client = m_resource->client();
@@ -564,6 +564,10 @@ const std::string& CWLSeatProtocol::seatName() const {
     return m_seatName;
 }
 
+bool CWLSeatProtocol::hasResources() const {
+    return std::ranges::any_of(m_allSeatResources, [](const auto& resource) { return !resource.expired(); });
+}
+
 void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
     const auto RESOURCE = m_seatResources.emplace_back(makeShared<CWLSeatResource>(makeShared<CWlSeat>(client, ver, id), this));
 
@@ -574,6 +578,8 @@ void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, u
     }
 
     RESOURCE->m_self = RESOURCE;
+    std::erase_if(m_allSeatResources, [](const auto& resource) { return resource.expired(); });
+    m_allSeatResources.emplace_back(RESOURCE);
 
     LOG(Log::DEBUG, "New seat resource bound at {:x}", (uintptr_t)RESOURCE.get());
 

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <poll.h>
 #include "session-lock.h"
 
@@ -16,7 +17,14 @@ static struct ext_session_lock_manager_v1* manager;
 static struct wl_surface*                  surface;
 static unsigned                            keys;
 static int                                 locked;
-static void                                keymap(void* d, struct wl_keyboard* k, unsigned f, int fd, unsigned s) {
+static void                                seat_caps(void* d, struct wl_seat* resource, unsigned caps) {}
+static void                                seat_named(void* d, struct wl_seat* resource, const char* value) {
+    const char* requested = getenv("MULTISEAT_SEAT");
+    if (!strcmp(value, requested ? requested : "Hyprland"))
+        seat = resource;
+}
+static const struct wl_seat_listener seat_listener = {seat_caps, seat_named};
+static void                          keymap(void* d, struct wl_keyboard* k, unsigned f, int fd, unsigned s) {
     close(fd);
 }
 static void enter(void* d, struct wl_keyboard* k, unsigned s, struct wl_surface* w, struct wl_array* a) {}
@@ -26,7 +34,8 @@ static void key(void* d, struct wl_keyboard* k, unsigned s, unsigned t, unsigned
         keys++;
 }
 static void                              mods(void* d, struct wl_keyboard* k, unsigned s, unsigned dep, unsigned lat, unsigned lock, unsigned group) {}
-static const struct wl_keyboard_listener keyboard_listener = {keymap, enter, leave, key, mods};
+static void                              repeat_info(void* d, struct wl_keyboard* k, int rate, int delay) {}
+static const struct wl_keyboard_listener keyboard_listener = {keymap, enter, leave, key, mods, repeat_info};
 static void                              configure(void* d, struct ext_session_lock_surface_v1* lock, unsigned serial, unsigned width, unsigned height) {
     int    fd     = memfd_create("private-test-lock", MFD_CLOEXEC);
     size_t length = width * height * 4;
@@ -75,9 +84,10 @@ static void                            global(void* d, struct wl_registry* r, un
     else if (!strcmp(interface, "wl_output") && version >= 4) {
         struct wl_output* bound = wl_registry_bind(r, id, &wl_output_interface, 4);
         wl_output_add_listener(bound, &output_listener, NULL);
-    } else if (!strcmp(interface, "wl_seat"))
-        seat = wl_registry_bind(r, id, &wl_seat_interface, 1);
-    else if (!strcmp(interface, "ext_session_lock_manager_v1"))
+    } else if (!strcmp(interface, "wl_seat")) {
+        struct wl_seat* bound = wl_registry_bind(r, id, &wl_seat_interface, 5);
+        wl_seat_add_listener(bound, &seat_listener, NULL);
+    } else if (!strcmp(interface, "ext_session_lock_manager_v1"))
         manager = wl_registry_bind(r, id, &ext_session_lock_manager_v1_interface, 1);
 }
 static void                              removed(void* d, struct wl_registry* r, unsigned id) {}

@@ -87,7 +87,8 @@ bool CPopup::focusAvailable() const {
 
     if (!m_windowOwner.expired()) {
         const auto WINDOW = m_windowOwner.lock();
-        return WINDOW->mapped() && WINDOW->acceptsInput() && g_pHyprRenderer->shouldRenderWindow(WINDOW);
+        return WINDOW->mapped() && WINDOW->acceptsInput() &&
+            (g_pHyprRenderer->shouldRenderWindow(WINDOW) || (g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->usesWorkspace(WINDOW->m_workspace)));
     }
 
     if (!m_layerOwner.expired())
@@ -214,10 +215,14 @@ void CPopup::onMap() {
 
     invalidateTreeExtentsCache();
 
-    if (const auto seat = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forClient(m_wlSurface->resource()->client()) : nullptr)
-        seat->refocus();
-    else
+    if (m_windowOwner.expired() || m_windowOwner->m_workspace->visible())
         g_pInputManager->simulateMouseMovement();
+    if (g_pSeatDesktopRegistry) {
+        for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+            if (seat->inputAllowed())
+                seat->refocus();
+        }
+    }
 
     setSubsurfaceHead(CSubsurface::create(m_self));
 
@@ -318,7 +323,8 @@ void CPopup::onCommit(bool ignoreSiblings) {
         return;
     }
 
-    if (!m_windowOwner.expired() && (!m_windowOwner->mapped() || !m_windowOwner->m_workspace->visible())) {
+    if (!m_windowOwner.expired() &&
+        (!m_windowOwner->mapped() || (!m_windowOwner->m_workspace->visible() && !(g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->usesWorkspace(m_windowOwner->m_workspace))))) {
         const auto PREV_SIZE = m_lastSize;
         m_lastSize           = m_backend->surfaceSize();
 

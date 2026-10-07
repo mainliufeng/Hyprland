@@ -1,6 +1,7 @@
 #include <wayland-client.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <poll.h>
 #include <unistd.h>
 #include "input-method.h"
@@ -12,7 +13,14 @@ static unsigned                                  serial;
 static int                                       active;
 static struct zwp_input_method_keyboard_grab_v2* grab;
 static unsigned                                  grabbed_keys;
-static void                                      grab_keymap(void* d, struct zwp_input_method_keyboard_grab_v2* g, unsigned f, int fd, unsigned size) {
+static void                                      seat_caps(void* d, struct wl_seat* resource, unsigned caps) {}
+static void                                      seat_named(void* d, struct wl_seat* resource, const char* value) {
+    const char* requested = getenv("MULTISEAT_SEAT");
+    if (!strcmp(value, requested ? requested : "Hyprland"))
+        seat = resource;
+}
+static const struct wl_seat_listener seat_listener = {seat_caps, seat_named};
+static void                          grab_keymap(void* d, struct zwp_input_method_keyboard_grab_v2* g, unsigned f, int fd, unsigned size) {
     close(fd);
 }
 static void grab_key(void* d, struct zwp_input_method_keyboard_grab_v2* g, unsigned serial, unsigned time, unsigned key, unsigned state) {
@@ -39,9 +47,10 @@ static void unavailable(void* d, struct zwp_input_method_v2* i) {
 }
 static const struct zwp_input_method_v2_listener listener = {activate, deactivate, surrounding, cause, content, done, unavailable};
 static void                                      global(void* d, struct wl_registry* r, unsigned id, const char* interface, unsigned version) {
-    if (!strcmp(interface, "wl_seat"))
-        seat = wl_registry_bind(r, id, &wl_seat_interface, 1);
-    else if (!strcmp(interface, "zwp_input_method_manager_v2"))
+    if (!strcmp(interface, "wl_seat")) {
+        struct wl_seat* bound = wl_registry_bind(r, id, &wl_seat_interface, 5);
+        wl_seat_add_listener(bound, &seat_listener, NULL);
+    } else if (!strcmp(interface, "zwp_input_method_manager_v2"))
         manager = wl_registry_bind(r, id, &zwp_input_method_manager_v2_interface, 1);
 }
 static void                              removed(void* d, struct wl_registry* r, unsigned id) {}
@@ -51,6 +60,7 @@ int                                      main(void) {
     if (!display)
         return 1;
     wl_registry_add_listener(wl_display_get_registry(display), &registry_listener, NULL);
+    wl_display_roundtrip(display);
     wl_display_roundtrip(display);
     if (!manager || !seat)
         return 2;

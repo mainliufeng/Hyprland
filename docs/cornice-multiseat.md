@@ -1,214 +1,155 @@
-# Cornice: human and agent seats in one Hyprland process
+# Cornice: 多 seat、共享窗口、独立工作区视图
 
-This fork adds **virtual desktop seats** for concurrent human and agent use.
-The human keeps the existing physical input devices and desktop. An agent gets
-its own Wayland seat, virtual pointer/keyboard, output, focused window and active
-workspace. All applications are managed and rendered by the same Hyprland
-process. The implementation never swaps a global “current seat”.
+本 fork 在同一个 Hyprland 进程里支持多个输入 seat。人使用默认的 `Hyprland`
+seat，agent 使用命名 seat；seat 数量没有写死为两个。
 
-Fork: <https://github.com/mainliufeng/Hyprland>.
-Upstream base: `5a78b5e927345860a27e2893bf894f97ee620c48`.
+每个 agent 有自己的鼠标、键盘焦点、按键/修饰键状态、输入法 relay、剪贴板、
+抓取/拖放状态和当前工作区。所有 seat 共享窗口与工作区集合，可以选择同一个 ws，
+也可以分别选择 ws1、ws10、ws11。一个输出可供多个 seat 使用。
 
-## Run an agent desktop
+物理输出仍显示人的当前工作区。`seat workspace` 只改变指定 agent 的视图，
+不会调用物理输出的 `changeWorkspace`。隐藏工作区接收真实 Wayland 输入，
+有 30 Hz 的 frame callback/FIFO 更新调度，按需渲染为截图；没有创建私有虚拟输出。
 
-These commands target an instance of **this fork**. Build and start it in a
-separate development session first; the tests below do that without replacing
-the running desktop. `hyprctl` must use that instance's
-`HYPRLAND_INSTANCE_SIGNATURE` and `XDG_RUNTIME_DIR`.
+Fork: <https://github.com/mainliufeng/Hyprland>。
+上游基础：`5a78b5e927345860a27e2893bf894f97ee620c48`。
+
+## 使用
+
+这些命令必须发给**本 fork 的实例**；安装的上游 Hyprland 没有这些接口。
+首次运行请使用独立开发会话。仓库测试会创建私有嵌套会话，不替换正在运行的桌面。
+`HYPRLAND_INSTANCE_SIGNATURE` 和 `XDG_RUNTIME_DIR` 应指向目标实例。
+
+先创建需要的 seats，再启动要共享操作的应用：
 
 ```sh
-hyprctl output create headless agent
-hyprctl eval 'hl.monitor({output="agent",mode="1280x800",position="1280x0",scale=1})'
-# Keep the primary seat on your human output; replace HUMAN-OUTPUT below.
-hyprctl dispatch 'hl.dsp.focus({monitor="HUMAN-OUTPUT"})'
-hyprctl seat create agent agent
+output=$(hyprctl -j monitors | jq -r '.[] | select(.focused) | .name')
+hyprctl seat create agent1 "$output"
+hyprctl seat create agent2 "$output"
+hyprctl seat create agent3 "$output"
+hyprctl seat workspace agent1 10
+hyprctl seat workspace agent2 11
+hyprctl seat workspace agent3 name:research
 hyprctl -j seat list
 ```
 
-Choose output position and resolution to fit your monitor arrangement. The
-output must exist, be enabled, be non-mirrored, and not be the primary seat's
-currently focused output. Seat creation reserves the entire output. A primary
-pointer cannot wander onto a reserved agent output.
+`seat list` 列出额外 seats，返回 `name`、`output`、`display`、`cursor`、
+`workspace` 和焦点窗口标题。默认 seat 不在这个额外 seats 列表里；它的状态仍通过
+`activeworkspace`、`activewindow`、`cursorpos` 查询。
 
-`seat list` returns the agent's `display` (for example `seat-agent-5`), cursor in
-compositor-global coordinates, workspace and focused window title. The display
-is an additional socket in the **same compositor**, with a private registry view:
-Agent clients see their own `wl_seat` and output. Primary clients keep the shared
-output registry so adding/reserving an output cannot invalidate an announcement
-they have already received. Ordinary Wayland toolkits therefore
-use the correct seat without patches or application title rules.
-
-```sh
-agent_display=$(hyprctl -j seat list | jq -r '.[] | select(.name=="agent") | .display')
-env -u WAYLAND_SOCKET -u DISPLAY WAYLAND_DISPLAY="$agent_display" \
-    dbus-run-session -- your-native-wayland-application
-hyprctl seat workspace agent 7
-hyprctl seat workspace agent name:research
-# Read the agent output through its own connection:
-env -u WAYLAND_SOCKET WAYLAND_DISPLAY="$agent_display" grim -o agent agent.png
-# End the seat; optionally remove its output afterwards.
-hyprctl seat remove agent
-hyprctl output remove agent
-```
-
-Use a separate application profile where the application requires one (notably
-browsers). A reused browser/DBus singleton can otherwise open a window in an
-existing human process. `WAYLAND_SOCKET` must be unset because an inherited file
-descriptor overrides `WAYLAND_DISPLAY`.
-
-The input driver must bind the advertised seat and pass it to
-`zwp_virtual_keyboard_manager_v1.create_virtual_keyboard` and
-`zwlr_virtual_pointer_manager_v1.create_virtual_pointer_with_output`.
-A Linux `uinput`/`ydotool` device still belongs to the human's physical input path.
-The real protocol driver in `hyprtester/multiseat/input.c` provides a working
-reference. Cornice's AI integration is a separate consumer of this interface.
-
-## Multiple agent seats
-
-There is no two-seat limit in the registry: one default human seat can coexist
-with multiple named agent seats. Each additional seat needs a different enabled,
-non-mirrored output; two active agent seats cannot reserve the same output.
-Workspace names/IDs remain global, so use distinct named workspaces.
-
-Run these commands against the fork instance (for example from a terminal
-started by that instance), not the installed upstream compositor:
-
-```sh
-human_output=$(hyprctl -j monitors | jq -r '.[] | select(.focused) | .name')
-for n in 1 2 3; do
-    agent_name="agent$n"
-    hyprctl output create headless "$agent_name"
-    hyprctl eval "hl.monitor({output=\"$agent_name\",mode=\"1280x800\",position=\"auto\",scale=1})"
-    hyprctl dispatch "hl.dsp.focus({monitor=\"$human_output\"})"
-    hyprctl seat create "$agent_name" "$agent_name"
-    hyprctl seat workspace "$agent_name" "name:$agent_name"
-done
-hyprctl -j seat list
-```
-
-The list contains three additional seats; the default `Hyprland` seat is not
-listed. Launch applications on the desired connection:
+通过指定 seat 的额外 Wayland socket 启动应用：
 
 ```sh
 agent_display=$(hyprctl -j seat list | jq -r '.[] | select(.name=="agent1") | .display')
 env -u WAYLAND_SOCKET -u DISPLAY WAYLAND_DISPLAY="$agent_display" \
     dbus-run-session -- kitty -o linux_display_server=wayland
-hyprctl seat workspace agent1 name:agent1-research
-env -u WAYLAND_SOCKET WAYLAND_DISPLAY="$agent_display" grim -o agent1 /tmp/agent1.png
-hyprctl seat remove agent1
-hyprctl output remove agent1
 ```
 
-The input controller must connect to that seat's Wayland display. An optional
-null seat in the virtual-pointer protocol selects the connection's owning seat,
-while legacy primary connections retain their default behavior. Physical
-`uinput`/`ydotool` injection still targets the human input path.
+socket 决定新窗口的默认工作区、缺省虚拟指针的 seat，以及无显式 seat 的旧协议默认值。
+**socket 不决定窗口所有权**：所有连接均能看到所有活跃 `wl_seat` 和输出；
+人启动的窗口可以接收 agent 的输入，agent 启动的窗口也可以被人操作。
+浏览器等应用应使用独立 profile，防止进程/DBus 单例把窗口交给旧进程。
 
-Run the following command to include the real four-seat test: a human and
-three agent applications type simultaneously, switch agent workspaces, and check
-that the primary state is unchanged. This also covers a null-seat virtual
-pointer and hot creation/reservation of outputs while primary clients are live.
-There is no tested large-seat capacity claim; practical limits depend on CPU,
-GPU and memory.
+截图与焦点操作：
 
 ```sh
-MULTISEAT_EXTRA_SEATS=1 MULTISEAT_REGRESSION=1 ./hyprtester/multiseat/run.sh
+# agent 仍在后台 ws10；人的屏幕和鼠标不动。
+hyprctl seat capture agent1 /tmp/agent1.png
+hyprctl seat capture Hyprland /tmp/human.png
+
+# 只允许聚焦该 seat 当前 ws 中可接受输入的窗口。
+hyprctl seat focus agent1 'title:^Agent terminal$'
+hyprctl seat focus agent1 'address:0xWINDOW_ADDRESS'
+
+# 同一工作区和同一窗口可以被两个 seat 选择。
+hyprctl seat workspace agent1 1
+hyprctl seat focus agent1 'title:^Shared editor$'
+
+hyprctl seat remove agent1
 ```
 
-Human read-only following, independent browsing of an agent's other workspaces
-and control takeover are **not implemented** by these seat commands. The
-[observer and control design](cornice-observer-control-design.md) describes the
-additional view, rendering and control-policy work required.
+截图保存 PNG，尺寸来自工作区所在输出，坐标与输入使用的工作区布局一致。
+截图包含该 ws 的窗口、弹窗、该 seat 的鼠标和输入法弹窗；输出级 shell 图层
+（bar、壁纸、launcher）仍由人的 shell 管理，不放入 agent 的窗口视图。
+`grim -o OUTPUT` 捕获的是物理输出当前显示内容，不能代替 agent 的 `seat capture`。
+截图路径必须绝对；可以含空格。锁屏时输入、切换、聚焦和截图均被拒绝。
 
-## Independent state and lifecycle
+## 输入控制
 
-| State | Implementation |
-| --- | --- |
-| Mouse and cursor | Per-seat pointer manager; software cursor on the reserved output; cursor surfaces and shape requests retain their seat |
-| Keyboard | Per-seat keymap, pressed keys, modifiers, focus, handler stack and client repeat data |
-| Navigation | Reserved output and its active workspace; `seat workspace` changes only that output |
-| Windows and popups | Application connection determines output ownership; focus, activation tokens, popup grabs, rendering and client move/resize use the seat controller |
-| Input grabs and constraints | Focus grabs, relative motion, locked/confined pointers and warp use the requesting seat |
-| Clipboard, primary selection, drag | Per-seat devices, sources, offers and drag state |
-| Text input | Per-seat text input/IME relay and keyboard grab routing |
-| Lock and idle | Agent input stops during session lock; cannot type into the human unlock surface; does not trigger human input wake/idle policy |
+控制程序通过 Wayland 虚拟输入协议注入事件，**显式按名称选择 wl_seat**：
 
-Workspace IDs/names remain compositor-wide and cannot be claimed from another
-output. This is an output reservation model: a human and agent do not concurrently
-navigate the same output or manipulate the same application surface. The agent's
-workspace stays rendered on its virtual output while the human uses another
-output. Arbitrary invisible workspaces on the human's output are not a second
-independent desktop.
+- `zwp_virtual_keyboard_manager_v1.create_virtual_keyboard(seat)`；
+- `zwlr_virtual_pointer_manager_v1.create_virtual_pointer_with_output(seat, output)`。
 
-Removing a seat closes its listening socket, removes its seat global, releases
-buttons/focus/grabs, disables input and hides its windows/layers. Existing client
-resources remain valid but inert until their connections close. The compositor
-does not kill their processes. A recreated name gets a new socket and controller;
-old clients are never reassigned to it. Disconnected retired controllers are
-collected on later seat create/remove commands. Output disconnection also retires
-its seat.
+可直接参考 `hyprtester/multiseat/input.c`。测试脚本会编译一个可运行的协议控制程序，
+其标准输入支持 `motion X Y`、`relative DX DY`、`button CODE STATE`、
+`key CODE STATE`、`mods MASK`、`type TEXT`；`type` 示例只处理 ASCII，真实键盘协议不限于 ASCII。
+实际应用中的 IME/text-input 能力取决于客户端是否为对应 seat 创建协议对象。
 
-## Scope and limits
+虚拟指针的 `seat=NULL` 使用连接所属 seat，主连接则使用默认 seat。
+`uinput`/`ydotool` 沿物理设备路径进入人的 seat，不能用于后台 agent。
+现有全局快捷键与 `hyprctl dispatch` 仍操作人的桌面；agent 应使用上述 seat API。
 
-- Implemented for native Wayland applications with virtual agent keyboard and
-  pointer input. Physical input remains on the primary seat. Physical device
-  reassignment, secondary tablet/touch devices and secondary XWayland are outside
-  this implementation.
-- The existing compositor keybind/dispatcher system continues to target the
-  primary seat. Agent navigation uses the explicit `seat workspace` API; agent
-  keys go to its application. Global privileged IPC is not implicitly redirected.
-- This is **interaction isolation**, not a security sandbox or a second Unix
-  login. The same UID, compositor, configuration, filesystem and privileged
-  protocols are shared. Use separate OS/application isolation for untrusted code.
-  Primary clients retain access to the shared output registry; output reservation
-  governs input/focus ownership rather than confidentiality.
-- Applications can share document state even with separate windows. Use separate
-  profiles/processes and an ownership policy for shared documents.
-- Verification uses real native GTK clients on nested/headless outputs. Hardware
-  DRM output combinations and every application's toolkit behavior have not been
-  certified. The running human session has not been replaced or restarted.
+剪贴板工具也要显式选择 seat：
 
-## Build and verify
+```sh
+env WAYLAND_DISPLAY="$agent_display" wl-copy --seat agent1 'agent clipboard'
+env WAYLAND_DISPLAY="$agent_display" wl-paste --seat agent1
+```
 
-On the tested Arch environment: Clang 22, Lua 5.5, aquamarine 0.15.1,
-hyprutils 0.14.2, system Python 3.14 and the upstream build dependencies.
+## 已知兼容边界
+
+- 已验证真实原生 Wayland GTK 3 应用：后台输入、共享窗口、抓取、拖放和截图。
+  其他工具包及复杂应用需要各自验证，不能从协议支持推断全部应用兼容。
+- **GTK 3.24.52 的热新增 seat 有限制**：实测运行中的应用收到新 seat 公告，却未绑定它。
+  [其 Wayland backend 源码](https://github.com/GNOME/gtk/blob/3.24.52/gdk/wayland/gdkdisplay-wayland.c)
+  把 seat 初始化排入 closure，而 closure 处理在显示连接初始化路径运行。
+  因此先创建 seats，再启动要共同操作的 GTK 3 应用；添加新 seat 后需要重启相关应用。
+  这不影响现有 seat 切 ws，也不是工作区或窗口独占限制。
+- GTK 3 的 Wayland 输入法模块
+  [选择 display 的默认 seat](https://github.com/GNOME/gtk/blob/3.24.52/modules/input/imwayland.c)，
+  不能据此保证同一 GTK 应用为每个 seat 提供独立 IME context。
+  合成器的 relay、IME 键盘抓取及 text-input-v3 路由按显式 seat 分离；客户端也必须支持。
+- GTK 客户端发起窗口移动/缩放时，也应使用事件所属 device/seat 的 API，
+  例如 `gdk_window_begin_move_drag_for_device`；默认 device 的便捷 API 不能代表另一个 seat。
+- 额外 seats 当前使用虚拟键盘/指针。物理设备重新分配、额外触摸/数位板、
+  XWayland 多输入焦点、输出热拔插组合尚不作为本版本保证。
+- 多 seat 不是安全沙箱。文件、进程、应用/文档数据、窗口布局和 ws 集合共享。
+  同一个应用的文本插入位置、选区、拖动和文档修改仍可能相互影响。
+  Prompt 可以要求 agent 留在 ws10，但本版本不设置工作区 ACL。
+- 人的只读跟随、自由只读浏览和接管模式仍是后续功能，不能把当前 ws 切换当作只读观察。
+
+## 生命周期
+
+删除 seat 会关闭其监听 socket、移除 seat global、结束拖动/抓取、清理输入焦点并禁用输入。
+**不会隐藏或关闭共享窗口**。旧协议资源、释放 wl_seat 后仍存在的子资源和旧连接保持有效；
+控制器在它们释放后才能回收。再次创建同名 seat 会得到新 socket；旧输入不会迁移过去。
+
+## 构建与验证
+
+测试环境：Clang 22、Lua 5.5、aquamarine 0.15.1、hyprutils 0.14.2、系统 Python/GTK3。
 
 ```sh
 git submodule update --init --recursive
 cmake -S . -B build-multiseat -G Ninja \
   -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang \
   -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS_DEBUG='-O0 -g0' \
-  -DCMAKE_C_FLAGS_DEBUG='-O0 -g0' -DUSE_TRACY=OFF -DNO_HYPRPM=ON \
   -DPython3_EXECUTABLE=/usr/bin/python3
 cmake --build build-multiseat -j4
-./build-multiseat/hyprland_gtests
-make -C hyprtester/plugin CXX=clang++ LUA_INCLUDES=/usr/include/lua5.5
+ulimit -c 0
+seat_test_coverage=$(mktemp -d /tmp/cornice-unit-coverage.XXXXXX)
+GCOV_PREFIX="$seat_test_coverage" ./build-multiseat/hyprland_gtests
+make -B -C hyprtester/plugin CXX=clang++ LUA_INCLUDES=/usr/include/lua5.5
 MULTISEAT_REGRESSION=1 ./hyprtester/multiseat/run.sh
 ```
 
-The harness needs Mutter (headless parent), dbus-daemon, system Python with
-PyGObject/GTK3, GTK3 development headers, GCC/pkg-config, wayland-scanner,
-wayland-protocols, xkbcommon, grim, wl-clipboard and hyprctl. A running host
-Hyprland is queried **read-only** for physical device names. The private fork
-starts with those devices disabled, its own runtime directory and DBus, and no
-DRM device. Test input clients connect only to the private compositor's sockets.
+集成套件需要 Mutter、dbus-daemon、PyGObject/GTK3、GTK 开发头文件、编译器、
+wayland-scanner、Wayland 协议、xkbcommon、wl-clipboard、hyprctl。
+套件只读取宿主设备名称；嵌套实例禁用这些物理设备，并使用独立 runtime、DBus 和
+`AQ_DRM_DEVICES=/dev/null`。所有测试输入只发给私有实例。
+它输出实际截图、应用/合成器日志和 `results.json`，见
+[本版本验证记录](verification/cornice-shared-workspaces.md)。
 
-The harness records `results.json`, client/compositor logs and actual output
-screenshots under the printed `/tmp/hyprland-multiseat.*` directory. Its assertions
-cover concurrent typing/clicking, modifier separation, clipboard and primary
-selection, real GTK popup and payload drag, two Chinese IME commits and independent IME keyboard grabs, real session
-lock/unlock, release-before-children lifetime, pointer confinement/relative
-motion, activation tokens, client window move/resize, layer-shell/focus grab, held-input seat removal,
-same-name recreation and collection after disconnect. The optional regression
-run exercises five upstream single-seat integration tests in another private
-fork instance: keyboardModifiersMergedOnFocus, pointerWarp, xdgInteractive,
-popupOpacityInheritsParentFade and xdgActivationSerial.
-
-See [recorded verification](verification/cornice-multiseat.md) for the observed
-results and visually inspected output captures. The two small build compatibility
-fixes (Clang coverage linking and workspace-swipe construction) allow the upstream
-Debug/unit-test configuration to build on this host.
-
-Upstream contributions must follow the repository's [AI usage policy](https://github.com/hyprwm/.github/blob/main/policies/AI_USAGE.md)
-and [issue guidelines](https://wiki.hypr.land/contributing-and-debugging/issue-guidelines/).
-This delivery is in the user's fork; no upstream PR, issue or discussion was opened.
+上游贡献须遵守 [AI 使用政策](https://github.com/hyprwm/.github/blob/main/policies/AI_USAGE.md)
+和 [issue 规范](https://wiki.hypr.land/contributing-and-debugging/issue-guidelines/)。
+本次仅交付到用户自己的 fork，没有向上游提交 PR、issue 或 discussion。

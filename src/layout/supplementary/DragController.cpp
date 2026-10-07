@@ -270,7 +270,10 @@ void CDragStateController::dragBegin(SP<ITarget> target, eMouseBindMode mode, st
         Keybinds::mgr()->shadowBinds();
 
     if (DRAGGINGTARGET->window()) {
-        Desktop::focusState()->rawWindowFocus(DRAGGINGTARGET->window(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        if (m_seat)
+            m_seat->focusWindow(DRAGGINGTARGET->window());
+        else
+            Desktop::focusState()->rawWindowFocus(DRAGGINGTARGET->window(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
         Desktop::windowState()->raise(DRAGGINGTARGET->window());
     }
 
@@ -308,7 +311,9 @@ bool CDragStateController::dragEnd() {
         const auto DRAGGING_WINDOW = draggingTarget->window();
 
         const auto MOUSECOORDS = mouseCoords();
-        PHLWINDOW  pWindow =
+        PHLWINDOW  pWindow     = m_seat ?
+            Desktop::viewState()->hitTest().windowAtWorkspace(MOUSECOORDS, m_seat->workspace(),
+                                                              Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, DRAGGING_WINDOW) :
             Desktop::viewState()->hitTest().windowAt(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, DRAGGING_WINDOW);
 
         if (pWindow) {
@@ -348,7 +353,10 @@ bool CDragStateController::dragEnd() {
 
     g_layoutManager->setTargetGeom(draggingTarget->position(), draggingTarget);
 
-    Desktop::focusState()->fullWindowFocus(draggingTarget->window(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    if (m_seat)
+        m_seat->focusWindow(draggingTarget->window());
+    else
+        Desktop::focusState()->fullWindowFocus(draggingTarget->window(), Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
     m_wasDraggingWindow = false;
     if (isResizeMode(m_dragMode))
@@ -514,7 +522,9 @@ void CDragStateController::mouseMove(const Vector2D& mousePos) {
     const auto PMONITOR = m_seat ? m_seat->monitor() : State::monitorState()->query().vec(middle).run();
 
     if (PMONITOR && PMONITOR->m_activeWorkspace && DRAGGINGTARGET->floating() /* If we're resizing a tiled target, don't do this */) {
-        const auto WS = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+        const auto WS = m_seat ? m_seat->workspace() : (PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace);
+        if (!WS)
+            return;
         DRAGGINGTARGET->assignToSpace(WS->space());
     }
 

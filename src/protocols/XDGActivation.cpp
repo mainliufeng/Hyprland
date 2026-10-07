@@ -94,9 +94,17 @@ void CXDGActivationProtocol::bindManager(wl_client* client, void* data, uint32_t
             return;
         }
 
-        const auto desktop = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forClient(pMgr->client()) : nullptr;
-        if (TOKEN->seatSocket != (desktop ? desktop->socketName() : ""))
-            return;
+        CSeatDesktop* desktop = nullptr;
+        if (!TOKEN->seatSocket.empty()) {
+            if (g_pSeatDesktopRegistry) {
+                for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+                    if (seat->active() && seat->socketName() == TOKEN->seatSocket)
+                        desktop = seat.get();
+                }
+            }
+            if (!desktop || !desktop->inputAllowed())
+                return;
+        }
 
         // remove token. It's been now spent.
         m_sentTokens.erase(TOKEN);
@@ -109,7 +117,7 @@ void CXDGActivationProtocol::bindManager(wl_client* client, void* data, uint32_t
             return;
         }
 
-        PWINDOW->activate();
+        PWINDOW->activateForSeat(desktop);
     });
 }
 

@@ -1,4 +1,5 @@
 #include "GlobalWindowController.hpp"
+#include "../../managers/SeatDesktop.hpp"
 
 #include "WindowState.hpp"
 #include "../view/window/Window.hpp"
@@ -31,7 +32,7 @@ void CGlobalWindowController::updateSuspendedStates() const {
         if (!w->mapped())
             continue;
 
-        w->setSuspended(w->isHidden() || !w->m_workspace || !w->m_workspace->visible());
+        w->setSuspended(w->isHidden() || !w->m_workspace || (!w->m_workspace->visible() && !(g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->usesWorkspace(w->m_workspace))));
     }
 }
 

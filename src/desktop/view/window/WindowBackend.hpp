@@ -14,6 +14,7 @@
 #include "../../DesktopTypes.hpp"
 
 class CWLSurfaceResource;
+class CWLSeatResource;
 
 namespace Desktop::View {
     class CWindow;
@@ -134,21 +135,21 @@ namespace Desktop::View {
         virtual void                   ping()                                                                             = 0;
 
         struct {
-            CSignalT<>                       map;
-            CSignalT<>                       unmap;
-            CSignalT<bool>                   commit;
-            CSignalT<>                       destroy;
-            CSignalT<SP<CWLSurfaceResource>> surfaceChanged;
-            CSignalT<SBackendMetadata>       metadataChanged;
-            CSignalT<SBackendTraits>         traitsChanged;
-            CSignalT<SBackendStateRequest>   stateRequest;
-            CSignalT<CBox>                   configureRequest;
-            CSignalT<CBox>                   geometryChanged;
-            CSignalT<>                       activationRequest;
-            CSignalT<>                       moveRequest;
-            CSignalT<eBackendResizeEdge>     resizeRequest;
-            CSignalT<>                       pong;
-            CSignalT<SP<IPopupBackend>>      newPopup;
+            CSignalT<>                                        map;
+            CSignalT<>                                        unmap;
+            CSignalT<bool>                                    commit;
+            CSignalT<>                                        destroy;
+            CSignalT<SP<CWLSurfaceResource>>                  surfaceChanged;
+            CSignalT<SBackendMetadata>                        metadataChanged;
+            CSignalT<SBackendTraits>                          traitsChanged;
+            CSignalT<SBackendStateRequest>                    stateRequest;
+            CSignalT<CBox>                                    configureRequest;
+            CSignalT<CBox>                                    geometryChanged;
+            CSignalT<>                                        activationRequest;
+            CSignalT<SP<CWLSeatResource>>                     moveRequest;
+            CSignalT<SP<CWLSeatResource>, eBackendResizeEdge> resizeRequest;
+            CSignalT<>                                        pong;
+            CSignalT<SP<IPopupBackend>>                       newPopup;
         } m_events;
 
         IWindowBackend(const IWindowBackend&)            = delete;

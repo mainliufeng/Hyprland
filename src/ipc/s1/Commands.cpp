@@ -1973,7 +1973,7 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
                     result += ",";
                 result += std::format("{{\"name\":\"{}\",\"output\":\"{}\",\"display\":\"{}\",\"cursor\":[{},{}],\"workspace\":\"{}\",\"window\":\"{}\"}}",
                                       escapeJSONStrings(seat->protocol()->seatName()), monitor ? escapeJSONStrings(monitor->m_name) : "", escapeJSONStrings(seat->socketName()),
-                                      position.x, position.y, monitor && monitor->m_activeWorkspace ? escapeJSONStrings(monitor->m_activeWorkspace->addressableName()) : "",
+                                      position.x, position.y, seat->workspace() ? escapeJSONStrings(seat->workspace()->addressableName()) : "",
                                       seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "");
             } else
                 result +=
@@ -1991,7 +1991,34 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
             return seat->switchWorkspace(args[3]);
         return "seat not found";
     }
-    return "usage: seat [list|create NAME OUTPUT|remove NAME|workspace NAME WORKSPACE]";
+    if (args.size() >= 4 && args[1] == "focus") {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        if (!seat)
+            return "seat not found";
+        if (!seat->inputAllowed())
+            return "seat is unavailable or session is locked";
+        std::string selector = args[3];
+        for (size_t i = 4; i < args.size(); ++i)
+            selector += " " + args[i];
+        const auto window = Desktop::viewState()->query().selector(selector).runWindow();
+        if (!window || window->m_workspace != seat->workspace())
+            return "window is not in seat workspace";
+        seat->focusWindow(window);
+        return seat->window() == window ? "ok" : "window cannot receive seat focus";
+    }
+    if (args.size() >= 4 && args[1] == "capture") {
+        std::string path = args[3];
+        for (size_t i = 4; i < args.size(); ++i)
+            path += " " + args[i];
+        if (args[2] == HL_SEAT_NAME) {
+            const auto monitor = Desktop::focusState()->monitor();
+            return g_pHyprRenderer->captureSeatWorkspace(monitor ? monitor->m_activeWorkspace : nullptr, nullptr, path);
+        }
+        if (auto seat = g_pSeatDesktopRegistry->forName(args[2]))
+            return g_pHyprRenderer->captureSeatWorkspace(seat->workspace(), seat, path);
+        return "seat not found";
+    }
+    return "usage: seat [list|create NAME OUTPUT|remove NAME|workspace NAME WORKSPACE|focus NAME WINDOW_SELECTOR|capture NAME ABSOLUTE_PATH]";
 }
 
 template <typename F>

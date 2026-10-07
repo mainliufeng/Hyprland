@@ -831,11 +831,6 @@ Vector2D CPointerManager::closestValid(const Vector2D& pos) {
         return {std::clamp(position.x, m_boundMonitor->m_position.x, m_boundMonitor->m_position.x + m_boundMonitor->m_size.x - 1),
                 std::clamp(position.y, m_boundMonitor->m_position.y, m_boundMonitor->m_position.y + m_boundMonitor->m_size.y - 1)};
     }
-    if (!m_softwareOnly && g_pSeatDesktopRegistry) {
-        const auto clamped = g_pSeatDesktopRegistry->clampPrimaryPointer(pos);
-        if (clamped != pos)
-            return clamped;
-    }
     static auto PADDING = CConfigValue<Config::INTEGER>("cursor:hotspot_padding");
 
     auto        CURSOR_PADDING = std::clamp(sc<int>(*PADDING), 0, 100);

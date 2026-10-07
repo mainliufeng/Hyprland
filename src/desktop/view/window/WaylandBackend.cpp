@@ -191,9 +191,9 @@ CWaylandBackend::CWaylandBackend(SP<CXDGSurfaceResource> resource) : m_resource(
             updateGeometryHints();
             updateTraits(true);
         });
-        m_listeners.move       = TOPLEVEL->m_events.requestMove.listen([this](const SXDGToplevelMoveRequest&) { m_events.moveRequest.emit(); });
-        m_listeners.resize =
-            TOPLEVEL->m_events.requestResize.listen([this](const SXDGToplevelResizeRequest& request) { m_events.resizeRequest.emit(normalizeResizeEdge(request.edges)); });
+        m_listeners.move       = TOPLEVEL->m_events.requestMove.listen([this](const SXDGToplevelMoveRequest& request) { m_events.moveRequest.emit(request.seat); });
+        m_listeners.resize     = TOPLEVEL->m_events.requestResize.listen(
+            [this](const SXDGToplevelResizeRequest& request) { m_events.resizeRequest.emit(request.seat, normalizeResizeEdge(request.edges)); });
     }
 
     if (const auto OWNER = resource->m_owner.lock())

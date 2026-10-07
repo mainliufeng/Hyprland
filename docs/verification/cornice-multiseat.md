@@ -1,3 +1,6 @@
+> 历史验证记录：这里验证的是此前的每 seat 独占输出模型。
+> 当前共享工作区版本见 [新验证记录](cornice-shared-workspaces.md)。
+
 # Observed multiseat verification — 2026-10-07
 
 The implementation ran in **one fork compositor process**, with two real

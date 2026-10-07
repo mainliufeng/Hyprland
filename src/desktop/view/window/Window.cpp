@@ -1,4 +1,6 @@
 #include "../../../managers/SeatDesktop.hpp"
+#include "../../../protocols/core/Seat.hpp"
+#include "../../../managers/SeatManager.hpp"
 #include <algorithm>
 #include <cmath>
 #include <ranges>
@@ -142,8 +144,8 @@ void CWindow::attachBackendListeners() {
     m_backendListeners.configureRequest  = m_backend->m_events.configureRequest.listen([this](const auto& box) { onConfigureRequest(box); });
     m_backendListeners.geometryChanged   = m_backend->m_events.geometryChanged.listen([this](const auto& box) { onGeometryChanged(box); });
     m_backendListeners.activationRequest = m_backend->m_events.activationRequest.listen([this] { onActivationRequest(); });
-    m_backendListeners.moveRequest       = m_backend->m_events.moveRequest.listen([this] { onMoveRequest(); });
-    m_backendListeners.resizeRequest     = m_backend->m_events.resizeRequest.listen([this](eBackendResizeEdge edge) { onResizeRequest(edge); });
+    m_backendListeners.moveRequest       = m_backend->m_events.moveRequest.listen([this](SP<CWLSeatResource> seat) { onMoveRequest(seat); });
+    m_backendListeners.resizeRequest     = m_backend->m_events.resizeRequest.listen([this](SP<CWLSeatResource> seat, eBackendResizeEdge edge) { onResizeRequest(seat, edge); });
     m_backendListeners.newPopup          = m_backend->m_events.newPopup.listen([this](const auto& popup) {
         if (popupHead())
             popupHead()->onNewPopup(popup);
@@ -812,7 +814,12 @@ std::unordered_map<std::string, std::string> CWindow::getEnv() {
 }
 
 void CWindow::activate(bool force) {
-    if (Desktop::focusState()->window() == m_self)
+    const auto origin = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+    activateForSeat(origin && origin->active() ? origin : nullptr, force);
+}
+
+void CWindow::activateForSeat(CSeatDesktop* seat, bool force) {
+    if (seat ? !seat->inputAllowed() || seat->window() == m_self : Desktop::focusState()->window() == m_self)
         return;
 
     static auto PFOCUSONACTIVATE = CConfigValue<Config::INTEGER>("misc:focus_on_activate");
@@ -833,8 +840,12 @@ void CWindow::activate(bool force) {
     if (m_target->floating())
         Desktop::windowState()->raise(m_self.lock());
 
-    Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_DESKTOP_STATE_CHANGE);
-    warpCursor();
+    if (seat)
+        seat->focusWindow(m_self.lock());
+    else {
+        Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        warpCursor();
+    }
 }
 
 void CWindow::onUpdateState(const SBackendStateRequest& request) {
@@ -1154,12 +1165,9 @@ void CWindow::mapWindow() {
     static auto PINITIALWSTRACKING = CConfigValue<Config::INTEGER>("misc:initial_workspace_tracking");
     static auto PAUTOGROUP         = CConfigValue<Config::INTEGER>("group:auto_group");
 
-    const auto  SEAT = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
-    if (SEAT && !SEAT->active()) {
-        backend().close();
-        return;
-    }
-    auto PMONITOR = SEAT ? SEAT->monitor() : Desktop::focusState()->monitor();
+    const auto  ORIGIN   = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+    const auto  SEAT     = ORIGIN && ORIGIN->active() ? ORIGIN : nullptr;
+    auto        PMONITOR = SEAT ? SEAT->monitor() : Desktop::focusState()->monitor();
     if (!SEAT && !Desktop::focusState()->monitor()) {
         Desktop::focusState()->rawMonitorFocus(State::monitorState()->query().vec({}).run());
         PMONITOR = Desktop::focusState()->monitor();
@@ -1168,7 +1176,7 @@ void CWindow::mapWindow() {
         LOG(Log::ERR, "mapWindow: no valid monitor/workspace, aborting map for {:x}", (uintptr_t)this);
         return;
     }
-    auto PWORKSPACE = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+    auto PWORKSPACE = SEAT ? SEAT->workspace() : (PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace);
     m_monitor       = PMONITOR;
     m_workspace     = PWORKSPACE;
     m_isMapped      = true;
@@ -1430,7 +1438,7 @@ void CWindow::mapWindow() {
     if (SEAT) {
         m_monitor = SEAT->monitor();
         if (!m_workspace || m_workspace->monitor() != SEAT->monitor())
-            m_workspace = SEAT->monitor()->m_activeWorkspace;
+            m_workspace = SEAT->workspace();
         PWORKSPACE = m_workspace;
     }
     PMONITOR = m_monitor.lock();
@@ -1498,9 +1506,9 @@ void CWindow::mapWindow() {
     }
 
     // check LS focus grab
-    const auto PFORCEFOCUS  = Desktop::viewState()->query().forceFocus().runWindow();
+    const auto PFORCEFOCUS  = SEAT ? nullptr : Desktop::viewState()->query().forceFocus().runWindow();
     const auto PLSFROMFOCUS = Desktop::viewState()->query().type(VIEW_TYPE_LAYER_SURFACE).surface(Desktop::focusState()->surface()).runLayer();
-    if (PLSFROMFOCUS && PLSFROMFOCUS->m_layerSurface->m_current.keyboardInteractivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE)
+    if (!SEAT && PLSFROMFOCUS && PLSFROMFOCUS->m_layerSurface->m_current.keyboardInteractivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE)
         m_state |= WINDOW_STATE_NO_INITIAL_FOCUS;
 
     // emit the hook event here after basic stuff has been initialized
@@ -1517,11 +1525,13 @@ void CWindow::mapWindow() {
     }
 
     if (!m_ruleApplicator->noFocus().valueOrDefault() && !(m_state & WINDOW_STATE_NO_INITIAL_FOCUS) && (!TRAITS.overrideRedirect || TRAITS.wantsFocus) && !workspaceSilent &&
-        !monitorSilent && (!PFORCEFOCUS || PFORCEFOCUS == m_self.lock()) && !g_pInputManager->isConstrained()) {
+        !monitorSilent && (!PFORCEFOCUS || PFORCEFOCUS == m_self.lock()) && (SEAT || !g_pInputManager->isConstrained())) {
 
         // don't steal pointer focus with X11 when buttons are held (e.g., during drags)
         // if the incoming window is an OR
-        if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect)
+        if (SEAT)
+            SEAT->focusWindow(m_self.lock());
+        else if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect)
             Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
 
         m_presentation->alpha(WINDOW_ALPHA_ACTIVE)->setValueAndWarp(*PACTIVEALPHA);
@@ -1861,8 +1871,8 @@ void CWindow::onActivationRequest() {
     activate();
 }
 
-void CWindow::onMoveRequest() {
-    const auto seat = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+void CWindow::onMoveRequest(SP<CWLSeatResource> requestingSeat) {
+    const auto seat = requestingSeat ? requestingSeat->manager()->m_desktop : nullptr;
     const auto drag = seat ? seat->dragController() : g_layoutManager->dragController().get();
     if (!m_isMapped || isHidden() || drag->target())
         return;
@@ -1873,8 +1883,8 @@ void CWindow::onMoveRequest() {
     drag->dragBegin(layoutTarget(), MBIND_MOVE, std::nullopt, true);
 }
 
-void CWindow::onResizeRequest(eBackendResizeEdge edge) {
-    const auto seat = g_pSeatDesktopRegistry && wlSurface()->resource() ? g_pSeatDesktopRegistry->forClient(wlSurface()->resource()->client()) : nullptr;
+void CWindow::onResizeRequest(SP<CWLSeatResource> requestingSeat, eBackendResizeEdge edge) {
+    const auto seat = requestingSeat ? requestingSeat->manager()->m_desktop : nullptr;
     const auto drag = seat ? seat->dragController() : g_layoutManager->dragController().get();
     if (!m_isMapped || isHidden() || drag->target())
         return;

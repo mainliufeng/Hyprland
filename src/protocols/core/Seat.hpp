@@ -179,6 +179,7 @@ class CWLSeatProtocol : public IWaylandProtocol {
     CWLSeatProtocol(const wl_interface* iface, const int& ver, const std::string& name, const std::string& seatName = HL_SEAT_NAME);
 
     const std::string& seatName() const;
+    bool               hasResources() const;
 
     virtual void       bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
@@ -198,6 +199,7 @@ class CWLSeatProtocol : public IWaylandProtocol {
 
     //
     std::vector<SP<CWLSeatResource>>     m_seatResources;
+    std::vector<WP<CWLSeatResource>>     m_allSeatResources;
     std::vector<SP<CWLKeyboardResource>> m_keyboards;
     std::vector<SP<CWLTouchResource>>    m_touches;
     std::vector<SP<CWLPointerResource>>  m_pointers;

@@ -18,6 +18,7 @@ class CWLSeatProtocol;
 class CWLSurfaceResource;
 class CVirtualKeyboardV1Resource;
 class CVirtualPointerV1Resource;
+class CEventLoopTimer;
 namespace Layout::Supplementary {
     class CDragStateController;
 }
@@ -46,6 +47,7 @@ class CSeatDesktop {
     CWLSeatProtocol*                             protocol() const;
     Pointer::CPointerManager*                    pointer() const;
     PHLMONITOR                                   monitor() const;
+    PHLWORKSPACE                                 workspace() const;
     PHLWINDOW                                    window() const;
     bool                                         active() const;
     bool                                         inputAllowed() const;
@@ -81,6 +83,7 @@ class CSeatDesktop {
     UP<CXCursorManager>                                  m_cursorTheme;
     UP<Layout::Supplementary::CDragStateController>      m_dragController;
     PHLMONITORREF                                        m_monitor;
+    PHLWORKSPACE                                         m_workspace;
     PHLWINDOWREF                                         m_window;
     bool                                                 m_active = true;
     Hyprutils::OS::CFileDescriptor                       m_socketFd;
@@ -98,22 +101,25 @@ class CSeatDesktop {
 
 class CSeatDesktopRegistry {
   public:
+    CSeatDesktopRegistry();
+    ~CSeatDesktopRegistry();
     std::string                          create(const std::string& name, PHLMONITOR monitor);
     std::string                          remove(const std::string& name);
     CSeatDesktop*                        forName(const std::string& name) const;
     CSeatDesktop*                        forManager(CSeatManager* manager) const;
-    CSeatDesktop*                        forMonitor(PHLMONITOR monitor) const;
     CSeatDesktop*                        forClient(const wl_client* client) const;
     bool                                 allowsGlobal(const wl_client* client, const wl_global* global) const;
     bool                                 isSeatGlobal(const wl_global* global) const;
+    bool                                 usesWorkspace(PHLWORKSPACE workspace) const;
+    bool                                 focusesWindow(PHLWINDOW window) const;
     const std::vector<UP<CSeatDesktop>>& seats() const;
-    Vector2D                             clampPrimaryPointer(const Vector2D& position) const;
 
   private:
     // Retain retired seats until their socket clients disconnect: Wayland
     // children may outlive wl_seat and removal of a registry global.
     void                          collectRetired();
     std::vector<UP<CSeatDesktop>> m_seats;
+    SP<CEventLoopTimer>           m_frameTimer;
 };
 
 inline UP<CSeatDesktopRegistry> g_pSeatDesktopRegistry;

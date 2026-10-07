@@ -100,8 +100,7 @@ CWLSeatProtocol* CSeatManager::protocol() const {
 }
 
 CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res, CSeatManager* owner) : resource(res) {
-    listeners.destroy =
-        res->m_events.destroy.listen([this, owner] { std::erase_if(owner->m_seatResources, [this](const auto& e) { return e->resource.expired() || e->resource == resource; }); });
+    listeners.destroy = res->m_events.destroy.listen([this, owner] { std::erase_if(owner->m_seatResources, [this](const auto& e) { return e->resource.expired(); }); });
 }
 
 void CSeatManager::onNewSeatResource(SP<CWLSeatResource> resource) {

@@ -4,6 +4,7 @@
 #include <wayland-client.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include "constraints.h"
 #include "relative-pointer.h"
@@ -11,6 +12,7 @@
 
 static struct xdg_activation_v1* activation;
 static unsigned                  activation_serial;
+static unsigned                  key_presses;
 static char                      activation_token[256];
 static void                      keymap(void* d, struct wl_keyboard* k, unsigned f, int fd, unsigned s) {
     close(fd);
@@ -21,9 +23,12 @@ static void enter(void* d, struct wl_keyboard* k, unsigned serial, struct wl_sur
 static void leave(void* d, struct wl_keyboard* k, unsigned serial, struct wl_surface* s) {}
 static void key(void* d, struct wl_keyboard* k, unsigned serial, unsigned time, unsigned code, unsigned state) {
     activation_serial = serial;
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED)
+        key_presses++;
 }
 static void                              mods(void* d, struct wl_keyboard* k, unsigned serial, unsigned dep, unsigned lat, unsigned locked, unsigned group) {}
-static const struct wl_keyboard_listener keyboard_listener = {keymap, enter, leave, key, mods};
+static void                              repeat_info(void* d, struct wl_keyboard* k, int rate, int delay) {}
+static const struct wl_keyboard_listener keyboard_listener = {keymap, enter, leave, key, mods, repeat_info};
 static void                              token_done(void* d, struct xdg_activation_token_v1* t, const char* token) {
     snprintf(activation_token, sizeof(activation_token), "%s", token);
 }
@@ -32,20 +37,28 @@ static const struct xdg_activation_token_v1_listener token_listener = {token_don
 static struct wl_display*                            display;
 static struct wl_compositor*                         compositor;
 static struct wl_seat*                               seat;
-static struct zwp_pointer_constraints_v1*            constraints;
-static struct zwp_relative_pointer_manager_v1*       relative_manager;
-static struct zwp_locked_pointer_v1*                 locked;
-static struct zwp_confined_pointer_v1*               confined;
-static GtkWidget*                                    window;
-static unsigned                                      relative_events;
-static int                                           drag_mode;
-static gboolean                                      button_press(GtkWidget* widget, GdkEventButton* event, gpointer data) {
+static void                                          seat_caps(void* d, struct wl_seat* resource, unsigned caps) {}
+static void                                          seat_named(void* d, struct wl_seat* resource, const char* value) {
+    const char* requested = getenv("MULTISEAT_SEAT");
+    if (!strcmp(value, requested ? requested : "Hyprland"))
+        seat = resource;
+}
+static const struct wl_seat_listener           seat_listener = {seat_caps, seat_named};
+static struct zwp_pointer_constraints_v1*      constraints;
+static struct zwp_relative_pointer_manager_v1* relative_manager;
+static struct zwp_locked_pointer_v1*           locked;
+static struct zwp_confined_pointer_v1*         confined;
+static GtkWidget*                              window;
+static unsigned                                relative_events;
+static int                                     drag_mode;
+static gboolean                                button_press(GtkWidget* widget, GdkEventButton* event, gpointer data) {
     if (event->button != 1 || !drag_mode)
         return FALSE;
     if (drag_mode == 1)
-        gdk_window_begin_move_drag(gtk_widget_get_window(window), 1, event->x_root, event->y_root, event->time);
+        gdk_window_begin_move_drag_for_device(gtk_widget_get_window(window), gdk_event_get_device((GdkEvent*)event), 1, event->x_root, event->y_root, event->time);
     else
-        gdk_window_begin_resize_drag(gtk_widget_get_window(window), GDK_WINDOW_EDGE_SOUTH_EAST, 1, event->x_root, event->y_root, event->time);
+        gdk_window_begin_resize_drag_for_device(gtk_widget_get_window(window), GDK_WINDOW_EDGE_SOUTH_EAST, gdk_event_get_device((GdkEvent*)event), 1, event->x_root, event->y_root,
+                                                event->time);
     drag_mode = 0;
     return TRUE;
 }
@@ -68,9 +81,10 @@ static void unconfined_event(void* d, struct zwp_confined_pointer_v1* p) {
 }
 static const struct zwp_confined_pointer_v1_listener confined_listener = {confined_event, unconfined_event};
 static void                                          global(void* d, struct wl_registry* r, unsigned id, const char* interface, unsigned version) {
-    if (!strcmp(interface, "wl_seat"))
-        seat = wl_registry_bind(r, id, &wl_seat_interface, 1);
-    else if (!strcmp(interface, "wl_compositor"))
+    if (!strcmp(interface, "wl_seat")) {
+        struct wl_seat* bound = wl_registry_bind(r, id, &wl_seat_interface, 5);
+        wl_seat_add_listener(bound, &seat_listener, NULL);
+    } else if (!strcmp(interface, "wl_compositor"))
         compositor = wl_registry_bind(r, id, &wl_compositor_interface, 1);
     else if (!strcmp(interface, "zwp_pointer_constraints_v1"))
         constraints = wl_registry_bind(r, id, &zwp_pointer_constraints_v1_interface, 1);
@@ -99,6 +113,14 @@ static gboolean                          input(gint fd, GIOCondition condition, 
             return FALSE;
         xdg_activation_v1_activate(activation, activation_token, surface);
         xdg_activation_token_v1_destroy(token);
+    } else if (!strncmp(text, "release-seat", 12)) {
+        wl_seat_release(seat);
+        seat = NULL;
+    } else if (!strncmp(text, "keys", 4)) {
+        wl_display_roundtrip(display);
+        printf("%u\n", key_presses);
+        fflush(stdout);
+        return TRUE;
     } else if (!strncmp(text, "move", 4)) {
         drag_mode = 1;
     } else if (!strncmp(text, "resize", 6)) {
@@ -146,8 +168,10 @@ int main(int argc, char** argv) {
     display = gdk_wayland_display_get_wl_display(gdk_display_get_default());
     wl_registry_add_listener(wl_display_get_registry(display), &registry_listener, NULL);
     wl_display_roundtrip(display);
+    wl_display_roundtrip(display);
     if (!seat || !constraints || !compositor || !relative_manager || !activation)
         return 2;
+    wl_display_roundtrip(display);
     struct wl_pointer* pointer = wl_seat_get_pointer(seat);
     wl_keyboard_add_listener(wl_seat_get_keyboard(seat), &keyboard_listener, NULL);
     struct zwp_relative_pointer_v1* rp = zwp_relative_pointer_manager_v1_get_relative_pointer(relative_manager, pointer);

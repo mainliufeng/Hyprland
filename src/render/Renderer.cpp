@@ -1,5 +1,9 @@
 #include "../managers/SeatDesktop.hpp"
 #include "Renderer.hpp"
+#include "../protocols/types/Buffer.hpp"
+#include "../managers/SessionLockManager.hpp"
+#include "../managers/input/InputMethodRelay.hpp"
+#include "../managers/input/InputMethodPopup.hpp"
 #include "../Compositor.hpp"
 #include "../helpers/math/Math.hpp"
 #include <algorithm>
@@ -470,7 +474,7 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
 
     Event::bus()->m_events.render.stage.emit({RENDER_PRE_WINDOWS, pMonitor, ctx});
 
-    const auto                desktopSeat   = g_pSeatDesktopRegistry ? g_pSeatDesktopRegistry->forMonitor(pMonitor) : nullptr;
+    const auto                desktopSeat   = ctx.m_sceneSeat;
     const auto                focusedWindow = desktopSeat ? desktopSeat->window() : Desktop::focusState()->window();
     std::vector<PHLWINDOWREF> windows;
     windows.reserve(Desktop::windowState()->windows().size());
@@ -987,10 +991,6 @@ SP<ITexture> IHyprRenderer::createTexture(const SP<Aquamarine::IBuffer> buffer, 
 void IHyprRenderer::renderLayer(CRenderContext& ctx, PHLLS pLayer, PHLMONITOR pMonitor, const Time::steady_tp& time, bool popups, bool lockscreen) {
     if (!pLayer)
         return;
-    if (pLayer->wlSurface()->resource() && g_pSeatDesktopRegistry) {
-        if (const auto seat = g_pSeatDesktopRegistry->forClient(pLayer->wlSurface()->resource()->client()); seat && !seat->active())
-            return;
-    }
 
     if (!pLayer->mapped() || !pLayer->acceptsInput() || !pLayer->alphaNonZero())
         return;
@@ -1358,7 +1358,7 @@ void IHyprRenderer::renderIME(CRenderContext& ctx, PHLMONITOR pMonitor, const Ti
     }
     if (g_pSeatDesktopRegistry) {
         for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
-            if (!seat->active() || seat->monitor() != pMonitor)
+            if (!seat->inputAllowed() || seat->monitor() != pMonitor || seat->workspace() != pMonitor->m_activeWorkspace)
                 continue;
             for (const auto& popup : seat->relay()->popups()) {
                 if (popup->shouldBeRendered())
@@ -2431,8 +2431,10 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     }
 
     if (g_pSeatDesktopRegistry) {
-        if (const auto seat = g_pSeatDesktopRegistry->forMonitor(pMonitor->m_self.lock()))
-            seat->pointer()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
+        for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+            if (seat->inputAllowed() && seat->monitor() == pMonitor->m_self.lock() && seat->workspace() == pMonitor->m_activeWorkspace)
+                seat->pointer()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
+        }
     }
 
     if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
@@ -3328,6 +3330,90 @@ void IHyprRenderer::addWindowToRenderUnfocused(PHLWINDOW window) {
 
 static DRMFormat snapshotFormat(PHLMONITOR monitor) {
     return monitor->useFP16() ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888;
+}
+
+class CSeatCaptureBuffer : public IHLBuffer {
+  public:
+    explicit CSeatCaptureBuffer(const Vector2D& dimensions) {
+        size = dimensions;
+        pixels.resize(static_cast<size_t>(size.x) * static_cast<size_t>(size.y) * 4);
+    }
+    Aquamarine::eBufferCapability caps() override {
+        return Aquamarine::BUFFER_CAPABILITY_DATAPTR;
+    }
+    Aquamarine::eBufferType type() override {
+        return Aquamarine::BUFFER_TYPE_SHM;
+    }
+    void update(const CRegion&) override {}
+    bool isSynchronous() override {
+        return true;
+    }
+    void sendRelease() override {} // CPU destination has no wl_buffer resource.
+    bool good() override {
+        return !pixels.empty();
+    }
+    Aquamarine::SSHMAttrs shm() override {
+        return {.success = true, .format = DRM_FORMAT_ARGB8888, .size = size, .stride = static_cast<int>(size.x) * 4};
+    }
+    std::tuple<uint8_t*, uint32_t, size_t> beginDataPtr(uint32_t) override {
+        return {pixels.data(), DRM_FORMAT_ARGB8888, pixels.size()};
+    }
+    std::vector<uint8_t> pixels;
+};
+
+std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path) {
+    if (g_pSessionLockManager->isSessionLocked())
+        return "session is locked";
+    if (m_context.active())
+        return "renderer is busy";
+    const auto monitor = workspace ? workspace->m_monitor.lock() : nullptr;
+    if (!monitor || !monitor->m_enabled || !monitor->m_dpmsStatus || (seat && !seat->inputAllowed()))
+        return "seat view is unavailable";
+    if (!std::filesystem::path(path).is_absolute())
+        return "capture path must be absolute";
+    const auto dimensions  = monitor->m_transformedSize;
+    auto       framebuffer = createFB("seat workspace capture");
+    if (!framebuffer->alloc(dimensions.x, dimensions.y, DRM_FORMAT_ARGB8888))
+        return "capture allocation failed";
+    framebuffer->setImageDescription(monitor->workBufferImageDescription());
+    auto    resources = makeShared<CSceneResources>(createFB("seat workspace blur"));
+    CRegion damage{0, 0, static_cast<int>(dimensions.x), static_cast<int>(dimensions.y)};
+    if (!beginRender(monitor, damage, RENDER_MODE_FULL_FAKE, {}, framebuffer, true, {.sceneResources = resources}))
+        return "capture render setup failed";
+    bool              finishing = false;
+    const CScopeGuard cleanup([&] {
+        if (!finishing)
+            abortRender();
+    });
+    m_context.m_sceneSeat            = seat;
+    m_context.m_renderingSnapshot    = true;
+    m_context.m_blockSurfaceFeedback = true;
+    draw(m_context, CClearPassElement::SClearData{CHyprColor(0.08F, 0.08F, 0.08F, 1.F)});
+    startRenderPass(m_context);
+    const auto now = Time::steadyNow();
+    renderWorkspace(m_context, workspace, now, eSceneMode::WORKSPACE_WINDOWS);
+    if (seat)
+        renderDragIcon(m_context, monitor, now);
+    const auto relay = seat ? seat->relay() : &g_pInputManager->m_relay;
+    for (const auto& popup : relay->popups()) {
+        if (popup->shouldBeRendered())
+            renderIMEPopup(m_context, popup.get(), monitor, now);
+    }
+    if (seat)
+        seat->pointer()->renderSoftwareCursorsFor(m_context, monitor, now, damage, std::nullopt, true, true);
+    else
+        Pointer::mgr()->renderSoftwareCursorsFor(m_context, monitor, now, damage, std::nullopt, true, true);
+    finishing = true;
+    endRender();
+    auto buffer = makeShared<CSeatCaptureBuffer>(dimensions);
+    if (!framebuffer->readPixels(CHLBufferReference{buffer}))
+        return "capture readback failed";
+    // RPT_EXPORT projects into readback order, so the first CPU row is the top.
+    const size_t stride = static_cast<size_t>(dimensions.x) * 4;
+    auto         image  = cairo_image_surface_create_for_data(buffer->pixels.data(), CAIRO_FORMAT_ARGB32, dimensions.x, dimensions.y, stride);
+    const auto   status = cairo_surface_write_to_png(image, path.c_str());
+    cairo_surface_destroy(image);
+    return status == CAIRO_STATUS_SUCCESS ? "ok" : std::format("capture PNG failed: {}", cairo_status_to_string(status));
 }
 
 SP<IFramebuffer> IHyprRenderer::makeSnapshotFB(PHLWINDOW pWindow) {

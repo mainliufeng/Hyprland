@@ -75,13 +75,6 @@ static SFullscreenWorkspaceFocusResult onFullscreenWorkspaceFocusWindow(PHLWINDO
 }
 
 void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface, bool forceFSCycle) {
-    if (pWindow && g_pSeatDesktopRegistry) {
-        if (auto desktop = g_pSeatDesktopRegistry->forMonitor(pWindow->m_monitor.lock())) {
-            desktop->focusWindow(pWindow, surface);
-            return;
-        }
-    }
-
     if (pWindow) {
         if (!pWindow->m_workspace)
             return;
@@ -105,13 +98,6 @@ void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWL
 }
 
 void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface) {
-    if (pWindow && g_pSeatDesktopRegistry) {
-        if (auto desktop = g_pSeatDesktopRegistry->forMonitor(pWindow->m_monitor.lock())) {
-            desktop->focusWindow(pWindow, surface);
-            return;
-        }
-    }
-
     static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PSPECIALFALLTHROUGH = CConfigValue<Config::INTEGER>("input:special_fallthrough");
 
@@ -154,7 +140,7 @@ void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLS
             PLASTWINDOW->m_ruleApplicator->propertiesChanged(Rule::RULE_PROP_FOCUS);
             PLASTWINDOW->presentation().refreshValues();
 
-            g_pXWaylandManager->activateWindow(PLASTWINDOW, false);
+            g_pXWaylandManager->activateWindow(PLASTWINDOW, g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->focusesWindow(PLASTWINDOW));
         }
 
         g_pSeatManager->setKeyboardFocus(nullptr);
@@ -214,7 +200,7 @@ void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLS
         PLASTWINDOW->presentation().refreshValues();
 
         if (!pWindow->backend().isX11() || !pWindow->backend().traits().overrideRedirect)
-            g_pXWaylandManager->activateWindow(PLASTWINDOW, false);
+            g_pXWaylandManager->activateWindow(PLASTWINDOW, g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->focusesWindow(PLASTWINDOW));
     }
 
     const auto PWINDOWSURFACE = surface ? surface : pWindow->wlSurface()->resource();
@@ -284,8 +270,6 @@ void CFocusState::rawSurfaceFocus(SP<CWLSurfaceResource> pSurface, PHLWINDOW pWi
 }
 
 void CFocusState::rawMonitorFocus(PHLMONITOR pMonitor) {
-    if (pMonitor && g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->forMonitor(pMonitor))
-        return;
     if (m_focusMonitor == pMonitor)
         return;
 
@@ -324,10 +308,8 @@ void CFocusState::resetWindowFocus() {
 }
 
 bool CFocusState::isWindowActive(PHLWINDOW pWindow) const {
-    if (pWindow && g_pSeatDesktopRegistry) {
-        if (const auto seat = g_pSeatDesktopRegistry->forMonitor(pWindow->m_monitor.lock()); seat && seat->window() == pWindow)
-            return true;
-    }
+    if (g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->focusesWindow(pWindow))
+        return true;
     const auto FOCUSWINDOW  = m_focusWindow.lock();
     const auto FOCUSSURFACE = m_focusSurface.lock();
 

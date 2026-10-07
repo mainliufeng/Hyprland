@@ -79,10 +79,10 @@ CInputManager::CInputManager() {
 
         LOG(Log::DEBUG, "cursorImage request: shape {} -> {}", sc<uint32_t>(event.shape), event.shapeName);
 
-        m_cursorSurfaceInfo.wlSurface->unassign();
-        m_cursorSurfaceInfo.vHotspot = {};
-        m_cursorSurfaceInfo.name     = event.shapeName;
-        m_cursorSurfaceInfo.hidden   = false;
+        m_cursorSurfaceInfo.wlSurface = Desktop::View::CWLSurface::create();
+        m_cursorSurfaceInfo.vHotspot  = {};
+        m_cursorSurfaceInfo.name      = event.shapeName;
+        m_cursorSurfaceInfo.hidden    = false;
 
         if (!cursorImageUnlocked())
             return;
@@ -806,9 +806,11 @@ void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& eve
     LOG(Log::DEBUG, "cursorImage request: surface {:x}", rc<uintptr_t>(event.surf.get()));
 
     if (event.surf != m_cursorSurfaceInfo.wlSurface->resource()) {
-        m_cursorSurfaceInfo.wlSurface->unassign();
+        m_cursorSurfaceInfo.wlSurface = Desktop::View::CWLSurface::create();
 
-        if (event.surf)
+        if (const auto shared = Desktop::View::CWLSurface::fromResource(event.surf))
+            m_cursorSurfaceInfo.wlSurface = shared;
+        else if (event.surf)
             m_cursorSurfaceInfo.wlSurface->assign(event.surf);
     }
 

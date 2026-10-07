@@ -118,6 +118,7 @@ namespace Render {
         bool                            isSoftware();
         bool                            isMgpu();
         void                            addWindowToRenderUnfocused(PHLWINDOW window);
+        std::string                     captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path);
         SP<IFramebuffer>                makeSnapshotFB(PHLWINDOW);
         SP<IFramebuffer>                makeSnapshotFB(PHLLS);
         SP<IFramebuffer>                makeSnapshotFB(WP<Desktop::View::CPopup>);

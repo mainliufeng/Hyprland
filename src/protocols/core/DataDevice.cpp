@@ -883,7 +883,9 @@ void CWLDataDeviceProtocol::abortDrag(CSeatManager* seat) {
 
 void CWLDataDeviceProtocol::renderDND(Render::CRenderContext& ctx, PHLMONITOR pMonitor, const Time::steady_tp& when) {
     for (auto& [seat, drag] : m_drags) {
-        if (seat->m_desktop && seat->m_desktop->monitor() != pMonitor)
+        if (ctx.m_sceneSeat ?
+                seat->m_desktop != ctx.m_sceneSeat :
+                (seat->m_desktop && (!seat->m_desktop->inputAllowed() || seat->m_desktop->monitor() != pMonitor || seat->m_desktop->workspace() != pMonitor->m_activeWorkspace)))
             continue;
         if (!drag.dndSurface || !drag.dndSurface->m_current.texture)
             continue;
@@ -901,10 +903,11 @@ void CWLDataDeviceProtocol::renderDND(Render::CRenderContext& ctx, PHLMONITOR pM
         data.box = box;
         g_pHyprRenderer->addPassElement(ctx, makeUnique<CTexPassElement>(std::move(data)));
 
-        CBox damageBox = CBox{surfacePos, drag.dndSurface->m_current.size}.expand(5);
-        g_pHyprRenderer->damageBox(damageBox);
-
-        drag.dndSurface->frame(when);
+        if (!ctx.readOnlyEffects()) {
+            CBox damageBox = CBox{surfacePos, drag.dndSurface->m_current.size}.expand(5);
+            g_pHyprRenderer->damageBox(damageBox);
+            drag.dndSurface->frame(when);
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+#include "SeatDesktop.hpp"
 #include "XWaylandManager.hpp"
 #include "../helpers/MiscFunctions.hpp"
 #include "../desktop/state/FocusState.hpp"
@@ -42,7 +43,7 @@ void CHyprXWaylandManager::activateSurface(SP<CWLSurfaceResource> pSurface, bool
         PWINDOW->backend().restackToTop();
     }
 
-    PWINDOW->backend().setActive(activate);
+    PWINDOW->backend().setActive(activate || (g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->focusesWindow(PWINDOW)));
 }
 
 void CHyprXWaylandManager::activateWindow(PHLWINDOW pWindow, bool activate) {
