@@ -73,7 +73,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Missing requested seat %s or output %s\n", seat_name, output_name);
         return 1;
     }
-    struct zwlr_virtual_pointer_v1* pointer    = zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(pointer_manager, seat, output);
+    struct zwlr_virtual_pointer_v1* pointer =
+        zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(pointer_manager, getenv("MULTISEAT_NULL_POINTER_SEAT") ? NULL : seat, output);
     struct zwp_virtual_keyboard_v1* keyboard   = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keyboard_manager, seat);
     struct xkb_context*             context    = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     const struct xkb_rule_names     rules      = {.layout = "us"};

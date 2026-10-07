@@ -1,6 +1,7 @@
 #include "core/Seat.hpp"
 #include "../managers/SeatManager.hpp"
 #include "VirtualPointer.hpp"
+#include "../managers/SeatDesktop.hpp"
 #include "core/Output.hpp"
 #include "../debug/log/Logger.hpp"
 
@@ -180,5 +181,11 @@ void CVirtualPointerProtocol::onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr
 }
 
 CSeatManager* CVirtualPointerV1Resource::manager() const {
-    return m_seat ? m_seat->manager() : g_pSeatManager.get();
+    if (m_seat)
+        return m_seat->manager();
+    if (g_pSeatDesktopRegistry) {
+        if (const auto desktop = g_pSeatDesktopRegistry->forClient(m_resource->client()))
+            return desktop->manager();
+    }
+    return g_pSeatManager.get();
 }

@@ -8,6 +8,10 @@ window.set_default_size(600,350)
 box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=20)
 box.pack_start(Gtk.Label(label=label),False,False,20)
 entry=Gtk.Entry()
+def focused(entry, event):
+    open(dest+'.ready','w').write('focused')
+    return False
+entry.connect('focus-in-event', focused)
 entry.connect('populate-popup',lambda e, menu: open(dest+'.popup','w').write('opened'))
 entry.connect('changed',lambda e: open(dest,'w').write(e.get_text()))
 box.pack_start(entry,False,False,20)

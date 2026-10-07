@@ -33,7 +33,9 @@ pointer cannot wander onto a reserved agent output.
 `seat list` returns the agent's `display` (for example `seat-agent-5`), cursor in
 compositor-global coordinates, workspace and focused window title. The display
 is an additional socket in the **same compositor**, with a private registry view:
-clients see their own `wl_seat` and output. Ordinary Wayland toolkits therefore
+Agent clients see their own `wl_seat` and output. Primary clients keep the shared
+output registry so adding/reserving an output cannot invalidate an announcement
+they have already received. Ordinary Wayland toolkits therefore
 use the correct seat without patches or application title rules.
 
 ```sh
@@ -60,6 +62,63 @@ The input driver must bind the advertised seat and pass it to
 A Linux `uinput`/`ydotool` device still belongs to the human's physical input path.
 The real protocol driver in `hyprtester/multiseat/input.c` provides a working
 reference. Cornice's AI integration is a separate consumer of this interface.
+
+## Multiple agent seats
+
+There is no two-seat limit in the registry: one default human seat can coexist
+with multiple named agent seats. Each additional seat needs a different enabled,
+non-mirrored output; two active agent seats cannot reserve the same output.
+Workspace names/IDs remain global, so use distinct named workspaces.
+
+Run these commands against the fork instance (for example from a terminal
+started by that instance), not the installed upstream compositor:
+
+```sh
+human_output=$(hyprctl -j monitors | jq -r '.[] | select(.focused) | .name')
+for n in 1 2 3; do
+    agent_name="agent$n"
+    hyprctl output create headless "$agent_name"
+    hyprctl eval "hl.monitor({output=\"$agent_name\",mode=\"1280x800\",position=\"auto\",scale=1})"
+    hyprctl dispatch "hl.dsp.focus({monitor=\"$human_output\"})"
+    hyprctl seat create "$agent_name" "$agent_name"
+    hyprctl seat workspace "$agent_name" "name:$agent_name"
+done
+hyprctl -j seat list
+```
+
+The list contains three additional seats; the default `Hyprland` seat is not
+listed. Launch applications on the desired connection:
+
+```sh
+agent_display=$(hyprctl -j seat list | jq -r '.[] | select(.name=="agent1") | .display')
+env -u WAYLAND_SOCKET -u DISPLAY WAYLAND_DISPLAY="$agent_display" \
+    dbus-run-session -- kitty -o linux_display_server=wayland
+hyprctl seat workspace agent1 name:agent1-research
+env -u WAYLAND_SOCKET WAYLAND_DISPLAY="$agent_display" grim -o agent1 /tmp/agent1.png
+hyprctl seat remove agent1
+hyprctl output remove agent1
+```
+
+The input controller must connect to that seat's Wayland display. An optional
+null seat in the virtual-pointer protocol selects the connection's owning seat,
+while legacy primary connections retain their default behavior. Physical
+`uinput`/`ydotool` injection still targets the human input path.
+
+Run the following command to include the real four-seat test: a human and
+three agent applications type simultaneously, switch agent workspaces, and check
+that the primary state is unchanged. This also covers a null-seat virtual
+pointer and hot creation/reservation of outputs while primary clients are live.
+There is no tested large-seat capacity claim; practical limits depend on CPU,
+GPU and memory.
+
+```sh
+MULTISEAT_EXTRA_SEATS=1 MULTISEAT_REGRESSION=1 ./hyprtester/multiseat/run.sh
+```
+
+Human read-only following, independent browsing of an agent's other workspaces
+and control takeover are **not implemented** by these seat commands. The
+[observer and control design](cornice-observer-control-design.md) describes the
+additional view, rendering and control-policy work required.
 
 ## Independent state and lifecycle
 
@@ -101,7 +160,8 @@ its seat.
 - This is **interaction isolation**, not a security sandbox or a second Unix
   login. The same UID, compositor, configuration, filesystem and privileged
   protocols are shared. Use separate OS/application isolation for untrusted code.
-  Existing clients that bound outputs before reservation keep those resources.
+  Primary clients retain access to the shared output registry; output reservation
+  governs input/focus ownership rather than confidentiality.
 - Applications can share document state even with separate windows. Use separate
   profiles/processes and an ownership policy for shared documents.
 - Verification uses real native GTK clients on nested/headless outputs. Hardware

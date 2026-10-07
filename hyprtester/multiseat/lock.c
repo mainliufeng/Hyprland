@@ -57,14 +57,25 @@ static void finished(void* d, struct ext_session_lock_v1* l) {
     _exit(3);
 }
 static const struct ext_session_lock_v1_listener lock_listener = {on_locked, finished};
-static void                                      global(void* d, struct wl_registry* r, unsigned id, const char* interface, unsigned version) {
+static void geometry(void* d, struct wl_output* o, int32_t x, int32_t y, int32_t pw, int32_t ph, int32_t sub, const char* make, const char* model, int32_t transform) {}
+static void mode(void* d, struct wl_output* o, uint32_t flags, int32_t w, int32_t h, int32_t refresh) {}
+static void done(void* d, struct wl_output* o) {}
+static void scale(void* d, struct wl_output* o, int32_t value) {}
+static void output_named(void* d, struct wl_output* o, const char* value) {
+    if (!strcmp(value, "human"))
+        output = o;
+}
+static void                            description(void* d, struct wl_output* o, const char* value) {}
+static const struct wl_output_listener output_listener = {geometry, mode, done, scale, output_named, description};
+static void                            global(void* d, struct wl_registry* r, unsigned id, const char* interface, unsigned version) {
     if (!strcmp(interface, "wl_compositor"))
         compositor = wl_registry_bind(r, id, &wl_compositor_interface, 4);
     else if (!strcmp(interface, "wl_shm"))
         shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
-    else if (!strcmp(interface, "wl_output"))
-        output = wl_registry_bind(r, id, &wl_output_interface, 1);
-    else if (!strcmp(interface, "wl_seat"))
+    else if (!strcmp(interface, "wl_output") && version >= 4) {
+        struct wl_output* bound = wl_registry_bind(r, id, &wl_output_interface, 4);
+        wl_output_add_listener(bound, &output_listener, NULL);
+    } else if (!strcmp(interface, "wl_seat"))
         seat = wl_registry_bind(r, id, &wl_seat_interface, 1);
     else if (!strcmp(interface, "ext_session_lock_manager_v1"))
         manager = wl_registry_bind(r, id, &ext_session_lock_manager_v1_interface, 1);
@@ -76,6 +87,7 @@ int                                      main(void) {
     if (!display)
         return 1;
     wl_registry_add_listener(wl_display_get_registry(display), &registry_listener, NULL);
+    wl_display_roundtrip(display);
     wl_display_roundtrip(display);
     if (!compositor || !shm || !manager || !output || !seat)
         return 2;

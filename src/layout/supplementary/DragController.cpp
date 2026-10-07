@@ -407,7 +407,10 @@ void CDragStateController::mouseMove(const Vector2D& mousePos) {
         canSkipUpdate = std::clamp(MSMONITOR - TIMERDELTA, 0.0, MSMONITOR) > m_totalMs * 1.0 / m_mouseMoveEventCount;
     }
 
-    if ((abs(TICKDELTA.x) < 1.f && abs(TICKDELTA.y) < 1.f) || (TIMERDELTA < MSMONITOR && canSkipUpdate && (m_dragMode != MBIND_MOVE)))
+    // A new drag must accept its first movement even if the previous drag updated
+    // within this refresh interval. Repeating identical pointer coordinates may
+    // not produce another motion event, leaving a one-movement resize unchanged.
+    if ((abs(TICKDELTA.x) < 1.f && abs(TICKDELTA.y) < 1.f) || (m_lastDragXY != m_beginDragXY && TIMERDELTA < MSMONITOR && canSkipUpdate && (m_dragMode != MBIND_MOVE)))
         return;
 
     m_timer = std::chrono::high_resolution_clock::now();

@@ -656,7 +656,10 @@ bool CSeatDesktopRegistry::allowsGlobal(const wl_client* client, const wl_global
     for (const auto& [name, output] : PROTO::outputs) {
         if (output->getGlobal() != global)
             continue;
-        return owner ? output->m_monitor == owner->monitor() : !forMonitor(output->m_monitor.lock());
+        // Primary clients may already have received this output's registry
+        // announcement before it was reserved. Changing their bind eligibility
+        // now would disconnect legitimate clients with a protocol error.
+        return !owner || output->m_monitor == owner->monitor();
     }
     if (owner && std::string_view(wl_global_get_interface(global)->name) == "wl_output")
         return false;

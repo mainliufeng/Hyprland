@@ -72,6 +72,35 @@ Agent layer-shell surface (the red protocol-test surface) on its own output:
 
 ## Limits of this evidence
 
+### Multiple-seat follow-up (2026-10-07)
+
+The follow-up run used `MULTISEAT_EXTRA_SEATS=1 MULTISEAT_REGRESSION=1` and the
+same private/nested compositor arrangement. A human and three agent seats typed
+simultaneously for 20 rounds per seat. Exact final text matched on all four
+clients; switching the extra agents' workspaces preserved the primary state.
+One extra agent created its virtual pointer without a suggested seat: its
+connection selected its own controller and left the human cursor unchanged.
+
+Hot output creation/reservation initially exposed a registry race: a primary
+client could bind an output announced before reservation and be disconnected.
+Primary clients now retain output bind eligibility; agent connections still
+expose only their own output. This is interaction isolation, not capture secrecy.
+The lock test helper explicitly selects its human output rather than relying on
+registry enumeration order. GTK input readiness is checked before typing.
+
+The full two-seat scenario and all **5/5** upstream integration regressions
+passed afterwards; the rebuilt binary also passed **647/647** unit tests.
+The resize regression uncovered an initial drag motion being throttled by the
+previous drag's refresh interval. The first movement of each drag is now
+accepted; repeating the same coordinate may otherwise never produce another
+motion event. Full logs are in `/tmp/hyprland-multiseat.yAchHO` and the observed
+states are in the [multiple-seat result record](cornice-many-seats-results.json).
+This establishes four-seat operation, not a measured high-seat capacity limit.
+
+The observer, independent workspace browsing and takeover described in the
+[design proposal](../cornice-observer-control-design.md) are not implemented or
+validated by these results.
+
 This proves the native Wayland/virtual-seat path exercised above. It does not
 certify secondary XWayland, physical-device reassignment, secondary touch/tablets,
 hardware DRM combinations or every application/profile/DBus behavior. It does

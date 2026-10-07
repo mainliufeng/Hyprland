@@ -188,6 +188,57 @@ misc={disable_hyprland_logo=true, disable_splash_rendering=true, force_default_w
     record('independent input and workspace', {'before': before, 'after': after, 'human_text': text('human-text'), 'agent_text': text('agent-text'), 'seat': ctl('seat list', True)})
     assert before == after, 'agent changed primary seat state'
     assert text('human-text') == 'HUMAN' and text('agent-text') == 'AGENT', 'input reached wrong application or was lost'
+    if os.environ.get('MULTISEAT_EXTRA_SEATS'):
+        many_before = state()
+        extra = []
+        for index in (1, 2):
+            name = 'extra' + str(index)
+            ok('eval hl.workspace_rule({workspace=\"' + str(200 + index) + '\",monitor=\"' + name + '\",default=true})')
+            ok('output create headless ' + name)
+            ok('eval hl.monitor({output="' + name + '",mode="1280x800",position="' + str((index + 1) * 1280) + 'x0",scale=1})')
+            wait_for(lambda: any(m['name'] == name for m in ctl('monitors', True)))
+            ok('seat create ' + name + ' ' + name)
+            env = {**ENV, 'WAYLAND_DISPLAY': next(s['display'] for s in ctl('seat list', True) if s['name'] == name)}
+            if index == 2: env['MULTISEAT_NULL_POINTER_SEAT'] = '1'
+            ok('seat workspace ' + name + ' ' + str(200 + index))
+            app = start(['/usr/bin/python3', str(SOURCE / 'gtk-window.py'), name + '-window', str(BASE / (name + '-text'))], name + '-app', env=env)
+            wait_for(lambda: any(c['title'] == name + '-window' for c in ctl('clients', True)))
+            driver = input_client(name, name, env)
+            wait_for(lambda: text(name + '-text.ready') == 'focused')
+            command(driver, 'type EXTRA' + str(index))
+            extra.append((name, app, driver))
+        def many_type(driver, character):
+            for i in range(20):
+                command(driver, 'motion 300 300')
+                command(driver, 'type ' + character)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            jobs = [pool.submit(many_type, human, 'H'), pool.submit(many_type, agent, 'A')]
+            jobs += [pool.submit(many_type, extra[0][2], 'X'), pool.submit(many_type, extra[1][2], 'Y')]
+            for job in jobs: job.result()
+        assert text('human-text') == 'HUMAN' + 'H' * 20
+        assert text('agent-text') == 'AGENT' + 'A' * 20
+        assert text('extra1-text') == 'EXTRA1' + 'X' * 20
+        assert text('extra2-text') == 'EXTRA2' + 'Y' * 20
+        assert next(s['cursor'] for s in ctl('seat list', True) if s['name'] == 'extra2') == [4140, 300]
+        assert state() == many_before
+        before = state()
+        for name, app, driver in extra:
+            ok('seat workspace ' + name + ' name:' + name + '-alternate')
+        assert state() == before
+        record('four simultaneous seats', {'human': text('human-text'), 'agents': [text('agent-text'), text('extra1-text'), text('extra2-text')], 'seats': ctl('seat list', True), 'primary_state_unchanged': True, 'null_pointer_seat_routed_by_connection': True})
+        for driver, initial in ((human, 'HUMAN'), (agent, 'AGENT')):
+            command(driver, 'mods 4')
+            command(driver, 'key 30 1'); command(driver, 'key 30 0')
+            command(driver, 'mods 0')
+            command(driver, 'key 14 1'); command(driver, 'key 14 0')
+            command(driver, 'type ' + initial)
+        for name, app, driver in reversed(extra):
+            driver.stdin.close()
+            assert driver.wait(timeout=5) == 0
+            app.terminate(); app.wait(timeout=5)
+            wait_for(lambda: not any(c['title'] == name + '-window' for c in ctl('clients', True)))
+            ok('seat remove ' + name)
+            ok('output remove ' + name)
     for round_number in range(20):
         command(human, 'motion ' + str(300 + round_number) + ' 300')
         command(human, 'type H')
