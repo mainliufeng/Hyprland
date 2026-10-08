@@ -8,6 +8,7 @@
 #include "../desktop/view/SessionLock.hpp"
 #include "../managers/SeatManager.hpp"
 #include "SeatDesktop.hpp"
+#include "screenshare/ScreenshareManager.hpp"
 #include "../managers/input/InputManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../state/MonitorState.hpp"
@@ -89,7 +90,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     if (upgrading && m_sessionLock && m_sessionLock->lock)
         m_sessionLock->lock->sendDenied();
     m_humanScope = pLock->humanScope();
-    ++m_lockEpoch;
+    advanceLockEpoch();
     m_renderedLocks.clear();
     m_presentedLocks.clear();
     m_lockId            = m_lockEpoch;
@@ -108,7 +109,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     });
 
     m_sessionLock->listeners.unlock = pLock->m_events.unlockAndDestroy.listen([this] {
-        ++m_lockEpoch;
+        advanceLockEpoch();
         m_humanScope = false;
         m_events.unlock.emit();
 
@@ -266,7 +267,7 @@ bool CSessionLockManager::clientDenied() {
 }
 
 void CSessionLockManager::clearSessionLock() {
-    ++m_lockEpoch;
+    advanceLockEpoch();
     m_humanScope = false;
     m_events.unlock.emit();
     m_sessionLock = {};
@@ -286,7 +287,7 @@ void CSessionLockManager::forceUnlock() {
 void CSessionLockManager::abandonToFullLock() {
     m_sessionLock.reset();
     m_humanScope = false;
-    ++m_lockEpoch;
+    advanceLockEpoch();
     m_lockId = m_lockEpoch;
     m_renderedLocks.clear();
     m_presentedLocks.clear();
@@ -315,7 +316,7 @@ void CSessionLockManager::abandonToFullLock() {
 
 void CSessionLockManager::forceLock() {
     m_humanScope = false;
-    ++m_lockEpoch;
+    advanceLockEpoch();
     PROTO::sessionLock->forceLock();
     m_events.lock.emit();
 }
@@ -348,8 +349,14 @@ void CSessionLockManager::watchOutput(PHLMONITOR monitor) {
             invalidateOutputs();
     }));
 }
-void CSessionLockManager::invalidateOutputs() {
+void CSessionLockManager::advanceLockEpoch() {
     ++m_lockEpoch;
+    if (Screenshare::mgr())
+        Screenshare::mgr()->discardInvalidatedFrames();
+}
+
+void CSessionLockManager::invalidateOutputs() {
+    advanceLockEpoch();
     m_presentedLocks.clear();
     m_renderedLocks.clear();
     for (const auto& monitor : State::monitorState()->monitors())

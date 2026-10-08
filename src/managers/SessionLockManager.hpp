@@ -107,6 +107,7 @@ class CSessionLockManager {
         CHyprSignalListener newLock;
     } m_listeners;
 
+    void advanceLockEpoch();
     void invalidateOutputs();
     void watchOutput(PHLMONITOR monitor);
     void onNewSessionLock(SP<CSessionLock> pWlrLock);

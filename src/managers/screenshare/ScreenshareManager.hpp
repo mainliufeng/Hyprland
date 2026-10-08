@@ -230,6 +230,7 @@ namespace Screenshare {
 
         UP<CCursorshareSession> newCursorSession(wl_client* client, WP<CWLPointerResource> pointer);
 
+        void                    discardInvalidatedFrames();
         void                    onOutputCommit(PHLMONITOR monitor);
         bool                    isOutputBeingSSd(PHLMONITOR monitor);
         bool                    isOutputDSBlocked(PHLMONITOR monitor);

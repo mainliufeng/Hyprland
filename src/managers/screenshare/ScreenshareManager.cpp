@@ -11,7 +11,24 @@ CScreenshareManager::CScreenshareManager() {
     ;
 }
 
+void CScreenshareManager::discardInvalidatedFrames() {
+    // Protocol resources keep unique ownership of these frames. Notify the
+    // client before dropping our weak reference, even if no copy FB will be
+    // prepared after a lock transition. Callbacks may retire other frames.
+    const auto frames = m_pendingFrames;
+    for (const auto& frame : frames) {
+        if (!frame || !frame->m_shared || !frame->done() || frame->m_copied || frame->m_failed || !frame->m_callback)
+            continue;
+        frame->m_failed = true;
+        FScreenshareCallback callback;
+        std::swap(callback, frame->m_callback);
+        callback(RESULT_NOT_COPIED);
+    }
+    std::erase_if(m_pendingFrames, [](const auto& frame) { return frame.expired() || frame->done(); });
+}
+
 void CScreenshareManager::onOutputCommit(PHLMONITOR monitor) {
+    discardInvalidatedFrames();
     std::erase_if(m_sessions, [&](const WP<CScreenshareSession>& session) { return session.expired(); });
 
     // if no pending frames, and no sessions are sharing, then unblock ds
@@ -25,22 +42,8 @@ void CScreenshareManager::onOutputCommit(PHLMONITOR monitor) {
     }
 
     std::ranges::for_each(m_pendingFrames, [&](WP<CScreenshareFrame>& frame) {
-        const auto pending = frame.get();
-        if (!pending || !pending->m_shared)
+        if (frame.expired() || !frame->m_shared || frame->done())
             return;
-
-        // A lock transition invalidates in-flight frames. The protocol still
-        // owns the frame, so removing only our weak reference would leave the
-        // client waiting forever instead of receiving a failed capture.
-        if (pending->done()) {
-            if (!pending->m_copied && !pending->m_failed && pending->m_callback) {
-                pending->m_failed = true;
-                FScreenshareCallback callback;
-                std::swap(callback, pending->m_callback);
-                callback(RESULT_NOT_COPIED);
-            }
-            return;
-        }
 
         if (frame->m_session->monitor() != monitor)
             return;
