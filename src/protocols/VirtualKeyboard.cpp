@@ -171,10 +171,8 @@ void CVirtualKeyboardProtocol::onCreateKeeb(CZwpVirtualKeyboardManagerV1* pMgr, 
         wl_client_post_implementation_error(pMgr->client(), "invalid virtual keyboard seat");
         return;
     }
-    if (auto desktop = requestedSeat->manager()->m_desktop; desktop && !desktop->allowsInputSource(pMgr->client())) {
-        wl_client_post_implementation_error(pMgr->client(), "seat input source revoked");
-        return;
-    }
+    const auto desktop      = requestedSeat->manager()->m_desktop;
+    const bool inputAllowed = !desktop || desktop->allowsInputSource(pMgr->client());
     const auto RESOURCE = m_keyboards.emplace_back(makeShared<CVirtualKeyboardV1Resource>(makeShared<CZwpVirtualKeyboardV1>(pMgr->client(), pMgr->version(), id), requestedSeat));
 
     if UNLIKELY (!RESOURCE->good()) {
@@ -185,7 +183,11 @@ void CVirtualKeyboardProtocol::onCreateKeeb(CZwpVirtualKeyboardManagerV1* pMgr, 
 
     LOG(Log::DEBUG, "New VKeyboard at id {}", id);
 
-    m_events.newKeyboard.emit(RESOURCE);
+    // Revocation applies to this device, not the entire Wayland connection.
+    // Multi-seat IMEs such as Fcitx also serve the human seat on that connection.
+    // Keep denied resources permanently inert: never attach an input device.
+    if (inputAllowed)
+        m_events.newKeyboard.emit(RESOURCE);
 }
 
 CSeatManager* CVirtualKeyboardV1Resource::manager() const {

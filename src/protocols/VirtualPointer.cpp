@@ -166,11 +166,8 @@ void CVirtualPointerProtocol::onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr
         wl_client_post_implementation_error(pMgr->client(), "invalid virtual pointer seat");
         return;
     }
-    const auto desktop = requestedSeat ? requestedSeat->manager()->m_desktop : g_pSeatDesktopRegistry->forClient(pMgr->client());
-    if (desktop && !desktop->allowsInputSource(pMgr->client())) {
-        wl_client_post_implementation_error(pMgr->client(), "seat input source revoked");
-        return;
-    }
+    const auto desktop      = requestedSeat ? requestedSeat->manager()->m_desktop : g_pSeatDesktopRegistry->forClient(pMgr->client());
+    const bool inputAllowed = !desktop || desktop->allowsInputSource(pMgr->client());
     const auto RESOURCE =
         m_pointers.emplace_back(makeShared<CVirtualPointerV1Resource>(makeShared<CZwlrVirtualPointerV1>(pMgr->client(), pMgr->version(), id), output, requestedSeat));
 
@@ -182,7 +179,10 @@ void CVirtualPointerProtocol::onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr
 
     LOG(Log::DEBUG, "New VPointer at id {}", id);
 
-    m_events.newPointer.emit(RESOURCE);
+    // A revoked device must not kill unrelated seats sharing this client.
+    // Without attachment, this resource stays inert across future resumes.
+    if (inputAllowed)
+        m_events.newPointer.emit(RESOURCE);
 }
 
 CSeatManager* CVirtualPointerV1Resource::manager() const {

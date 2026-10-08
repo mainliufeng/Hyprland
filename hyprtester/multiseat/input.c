@@ -115,9 +115,19 @@ int main(int argc, char** argv) {
             wl_seat_release(seat);
             seat = NULL;
         } else if (!strcmp(line, "new-pointer")) {
-            zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(pointer_manager, seat, output);
+            pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(pointer_manager, seat, output);
         } else if (!strcmp(line, "new-keyboard")) {
-            zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keyboard_manager, seat);
+            keyboard           = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keyboard_manager, seat);
+            text               = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+            char replacement[] = "/tmp/hyprland-replacement-keymap.XXXXXX";
+            fd                 = mkstemp(replacement);
+            unlink(replacement);
+            length = strlen(text) + 1;
+            if (fd < 0 || write(fd, text, length) != (ssize_t)length)
+                return 1;
+            zwp_virtual_keyboard_v1_keymap(keyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, length);
+            close(fd);
+            free(text);
         } else if (!strncmp(line, "type ", 5)) {
             for (const unsigned char* ch = (const unsigned char*)line + 5; *ch; ++ch) {
                 int found = 0;
