@@ -220,7 +220,7 @@ uint64_t CSeatDesktop::controlGeneration() const {
     return m_controlGeneration;
 }
 
-void CSeatDesktop::setPaused(bool paused) {
+void CSeatDesktop::setPaused(bool paused, bool composedKeyboard) {
     m_managedControl = true;
     // Every transition revokes existing virtual devices, including devices
     // that remained connected across pause/resume or a session lock.
@@ -242,6 +242,10 @@ void CSeatDesktop::setPaused(bool paused) {
     ++m_controlGeneration;
     m_captureGrant.clear();
     m_paused = paused;
+    // Broker input already composes Unicode (or runs the physical seat's IME
+    // in a human viewer). Do not compose those keys a second time on this seat.
+    // Bind this mode to the control generation; pause/resume resets it.
+    m_composedKeyboard = !paused && composedKeyboard;
     IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("{},{},{}", protocol()->seatName(), m_controlGeneration, m_paused ? "paused" : "active")});
 }
 
@@ -415,7 +419,7 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
     if (m_manager->m_keyboardEventHandlers.dispatch(event, keyboard, true))
         return;
     const auto ime = m_relay->m_inputMethod.lock();
-    if (ime && ime->hasGrab() && ime->grabClient() != keyboard->getClient()) {
+    if (!m_composedKeyboard && ime && ime->hasGrab() && ime->grabClient() != keyboard->getClient()) {
         ime->setKeyboard(keyboard);
         ime->sendKey(event.timeMs, event.keycode, event.state);
     } else
@@ -437,7 +441,7 @@ void CSeatDesktop::keyboardModifiers(SP<IKeyboard> keyboard) {
         locked |= other->m_modifiersState.locked;
     }
     const auto ime = m_relay->m_inputMethod.lock();
-    if (ime && ime->hasGrab() && ime->grabClient() != keyboard->getClient())
+    if (!m_composedKeyboard && ime && ime->hasGrab() && ime->grabClient() != keyboard->getClient())
         ime->sendMods(depressed, latched, locked, keyboard->m_modifiersState.group);
     else
         m_manager->sendKeyboardMods(depressed, latched, locked, keyboard->m_modifiersState.group);

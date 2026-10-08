@@ -62,7 +62,7 @@ class CSeatDesktop {
     bool                                         captureGranted(const std::string& grant) const;
     uint64_t                                     controlGeneration() const;
     uint64_t                                     viewEpoch() const;
-    void                                         setPaused(bool paused);
+    void                                         setPaused(bool paused, bool composedKeyboard = false);
     void                                         retire();
     const std::string&                           socketName() const;
     bool                                         ownsClient(const wl_client* client) const;
@@ -101,6 +101,7 @@ class CSeatDesktop {
     PHLWORKSPACE                                         m_workspace;
     PHLWINDOWREF                                         m_window;
     bool                                                 m_active              = true;
+    bool                                                 m_composedKeyboard    = false;
     bool                                                 m_paused              = false;
     bool                                                 m_managedControl      = false;
     bool                                                 m_continueOnHumanLock = false;

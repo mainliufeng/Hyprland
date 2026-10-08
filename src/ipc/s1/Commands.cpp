@@ -1985,7 +1985,7 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input"]})";
     if (args.size() == 2 && args[1] == "lock-state")
         return g_pSessionLockManager->protectionStateJSON();
     if (args.size() == 3 && args[1] == "create-private-output")
@@ -2028,10 +2028,10 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
         const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
         if (!seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4])
             return "stale seat identity or control generation";
-        if (args[1] == "control" && args.size() == 6 && (args[5] == "pause" || args[5] == "resume")) {
-            if (args[5] == "resume" && (g_pSessionLockManager->isSessionLocked() || !seat->viewAvailable()))
+        if (args[1] == "control" && args.size() == 6 && (args[5] == "pause" || args[5] == "resume" || args[5] == "resume-composed")) {
+            if (args[5] != "pause" && (g_pSessionLockManager->isSessionLocked() || !seat->viewAvailable()))
                 return "seat view is unavailable";
-            seat->setPaused(args[5] == "pause");
+            seat->setPaused(args[5] == "pause", args[5] == "resume-composed");
             return seatState(seat);
         }
         if (!seat->inputAllowed())
