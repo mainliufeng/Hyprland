@@ -115,7 +115,12 @@ signal.signal(signal.SIGINT, interrupted)
 try:
     # Read host names only, before starting the private compositor; disable all
     # matching physical devices in its startup config, including no-op libseat.
-    host_devices = json.loads(subprocess.check_output(['hyprctl', '-j', 'devices'], text=True, timeout=5))
+    if os.environ.get('MULTISEAT_TEST_SANDBOX') == '1':
+        # A device/PID sandbox has no host compositor socket or input devices.
+        assert not pathlib.Path('/dev/input').exists()
+        host_devices = {}
+    else:
+        host_devices = json.loads(subprocess.check_output(['hyprctl', '-j', 'devices'], text=True, timeout=5))
     device_rules = []
     for group in ('mice', 'keyboards', 'touch'):
         for device in host_devices.get(group, []):
@@ -379,6 +384,19 @@ misc={disable_hyprland_logo=true, disable_splash_rendering=true, force_default_w
     assert text('human-text').endswith('STILL')
     assert len(ctl('clients', True)) == 4
     record('retirement with shared clients and live seat children', 'windows survive; stale input inert; primary functional')
+    # A centred cursor on a 1x output used to hide an unconditional disconnect
+    # warp. Removing an agent output must preserve an off-centre primary cursor.
+    ok('eval hl.monitor({output="human",mode="3072x1920",position="0x0",scale=2})')
+    wait_for(lambda: next(m for m in ctl('monitors', True) if m['name'] == 'human')['scale'] == 2)
+    ok('seat create-private-output cursor-retire')
+    wait_for(lambda: any(m['name'] == 'cursor-retire' for m in ctl('monitors', True)))
+    command(human, 'motion 320 200')
+    before_remove = state()
+    ok('output remove cursor-retire')
+    wait_for(lambda: not any(m['name'] == 'cursor-retire' for m in ctl('monitors', True)))
+    after_remove = state()
+    assert after_remove == before_remove, (before_remove, after_remove)
+    record('private output removal at 2x', {'human_cursor_focus_workspace_unchanged': True})
     if os.environ.get('MULTISEAT_REGRESSION'):
         regression_env = ENV.copy()
         regression_env['WAYLAND_DISPLAY'] = 'parent'

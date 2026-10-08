@@ -396,6 +396,9 @@ void CMonitor::onDisconnect(bool destroy) {
 
     LOG(Log::DEBUG, "onDisconnect called for {}", m_name);
 
+    // A private agent output never owns the primary cursor or focus. Remember
+    // its role before disconnect listeners retire its seats and output policy.
+    const bool PRIVATE_OUTPUT = g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->isPrivateOutput(m_self.lock());
     m_events.disconnect.emit();
     if (g_pHyprRenderer && g_pHyprRenderer->glBackend())
         g_pHyprRenderer->glBackend()->destroyMonitorResources(m_self);
@@ -403,7 +406,7 @@ void CMonitor::onDisconnect(bool destroy) {
     // Cleanup everything. Move windows back, snap cursor, shit.
     PHLMONITOR BACKUPMON = nullptr;
     for (auto const& m : State::monitorState()->monitors()) {
-        if (m.get() != this) {
+        if (m.get() != this && (!g_pSeatDesktopRegistry || !g_pSeatDesktopRegistry->isPrivateOutput(m))) {
             BACKUPMON = m;
             break;
         }
@@ -447,13 +450,15 @@ void CMonitor::onDisconnect(bool destroy) {
 
     State::Workspace::monitorDisconnected(m_self.lock());
 
-    if (BACKUPMON) {
-        // snap cursor
-        Pointer::pointerController()->warpTo(BACKUPMON->m_position + BACKUPMON->m_transformedSize / 2.F, true);
-    } else {
-        Desktop::focusState()->surface().reset();
-        Desktop::focusState()->window().reset();
-        Desktop::focusState()->monitor().reset();
+    if (!PRIVATE_OUTPUT) {
+        // Pointer coordinates are logical, including on HiDPI outputs.
+        if (BACKUPMON)
+            Pointer::pointerController()->warpTo(BACKUPMON->m_position + BACKUPMON->m_size / 2.F, true);
+        else {
+            Desktop::focusState()->surface().reset();
+            Desktop::focusState()->window().reset();
+            Desktop::focusState()->monitor().reset();
+        }
     }
 
     if (m_activeWorkspace)
