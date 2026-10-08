@@ -62,6 +62,7 @@ namespace Desktop::View {
 
         WP<CLayerShellResource>                                   m_layerSurface;
         bool                                                      shouldBlur() const;
+        CSeatDesktop*                                             seatDesktop() const;
 
         LayerFlags                                                m_flags = LAYER_FLAG_ABOVE_FULLSCREEN;
 
@@ -91,8 +92,7 @@ namespace Desktop::View {
         MONITORID                               monitorID();
 
       private:
-        CSeatDesktop* seatDesktop() const;
-        bool          m_mapped = false;
+        bool m_mapped = false;
 
         struct {
             CHyprSignalListener destroy;

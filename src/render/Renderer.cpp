@@ -994,6 +994,8 @@ SP<ITexture> IHyprRenderer::createTexture(const SP<Aquamarine::IBuffer> buffer, 
 void IHyprRenderer::renderLayer(CRenderContext& ctx, PHLLS pLayer, PHLMONITOR pMonitor, const Time::steady_tp& time, bool popups, bool lockscreen) {
     if (!pLayer)
         return;
+    if (ctx.m_renderingSnapshot && ctx.m_sceneSeat && pLayer->seatDesktop() != ctx.m_sceneSeat)
+        return;
 
     if (!pLayer->mapped() || !pLayer->acceptsInput() || !pLayer->alphaNonZero())
         return;
@@ -3405,7 +3407,10 @@ std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDes
     draw(m_context, CClearPassElement::SClearData{CHyprColor(0.08F, 0.08F, 0.08F, 1.F)});
     startRenderPass(m_context);
     const auto now = Time::steadyNow();
-    renderWorkspace(m_context, workspace, now, eSceneMode::WORKSPACE_WINDOWS);
+    // A private desktop includes its real bar, menus and prompt surface. Shared
+    // workspace captures retain their window-only policy (no human shell).
+    const auto scene = seat && g_pSeatDesktopRegistry->isPrivateOutput(monitor) ? eSceneMode::WORKSPACE_WITH_SHELL : eSceneMode::WORKSPACE_WINDOWS;
+    renderWorkspace(m_context, workspace, now, scene);
     const bool cursorVisible = !seat || seat->workspace() == workspace;
     if (seat && cursorVisible)
         renderDragIcon(m_context, monitor, now);

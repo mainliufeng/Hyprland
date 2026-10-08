@@ -416,6 +416,18 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
         keyboard->updateModifiersState();
         keyboardModifiers(keyboard);
     }
+    // Numeric workspace bindings remain scoped to this desktop's namespace.
+    if (event.keycode >= 2 && event.keycode <= 11 && xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE)) {
+        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
+            switchWorkspace("name:cornice-agent-" + protocol()->seatName() + "-ws-" + std::to_string(event.keycode == 11 ? 10 : event.keycode - 1));
+        return;
+    }
+    // This shortcut belongs to the secondary seat, never the human bind table.
+    if (event.keycode == 30 && xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE)) {
+        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
+            IPC::Socket2::sock()->postEvent({"seatshortcut", protocol()->seatName() + ",prompt"});
+        return;
+    }
     if (m_manager->m_keyboardEventHandlers.dispatch(event, keyboard, true))
         return;
     const auto ime = m_relay->m_inputMethod.lock();
@@ -572,6 +584,21 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
             surface = popup->getSurface();
             local   = position - popup->globalBox().pos();
         }
+        // Each desktop has its own shell surfaces. Never hit a human or another
+        // desktop's bar, even when workspaces share a monitor.
+        if (!surface) {
+            for (const auto level : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP}) {
+                std::vector<PHLLSREF> layers;
+                for (const auto& ref : monitor()->m_layerSurfaceLayers[level]) {
+                    if (const auto layer = ref.lock(); layer && layer->seatDesktop() == this)
+                        layers.emplace_back(ref);
+                }
+                PHLLS found;
+                surface = hitTest.layerSurfaceAt(position, &layers, &local, &found);
+                if (surface)
+                    break;
+            }
+        }
         if (!surface) {
             auto current = workspace();
             window       = hitTest.windowAtWorkspace(position, current, Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
@@ -604,8 +631,8 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
     }
 }
 
-std::string CSeatDesktop::switchWorkspace(const std::string& name) {
-    if (!inputAllowed())
+std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly) {
+    if (!inputAllowed() && (!viewOnly || !active() || g_pSessionLockManager->isSessionLocked()))
         return "seat is unavailable or session is locked";
     auto current = State::workspaceState()->query().input(name).run();
     if (!current) {

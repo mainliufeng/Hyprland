@@ -1985,7 +1985,7 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input","seat-shell-v1"]})";
     if (args.size() == 2 && args[1] == "lock-state")
         return g_pSessionLockManager->protectionStateJSON();
     if (args.size() == 3 && args[1] == "create-private-output")
@@ -2115,9 +2115,9 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
         return g_pSeatDesktopRegistry->create(args[2], State::monitorState()->query().name(args[3]).run());
     if (args[1] == "remove" && args.size() == 3)
         return g_pSeatDesktopRegistry->remove(args[2]);
-    if (args.size() == 4 && args[1] == "workspace") {
+    if (args.size() == 4 && (args[1] == "workspace" || args[1] == "view-workspace")) {
         if (auto seat = g_pSeatDesktopRegistry->forName(args[2]))
-            return seat->switchWorkspace(args[3]);
+            return seat->switchWorkspace(args[3], args[1] == "view-workspace");
         return "seat not found";
     }
     if (args.size() >= 4 && args[1] == "focus") {

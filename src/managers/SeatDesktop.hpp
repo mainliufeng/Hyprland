@@ -75,7 +75,7 @@ class CSeatDesktop {
     void                                         attachPointer(SP<IPointer> pointer);
     void                                         focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr);
     void                                         refocus(uint32_t timeMs = 0, bool keyboard = false);
-    std::string                                  switchWorkspace(const std::string& name);
+    std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false);
     std::vector<uint32_t>                        pressedKeys() const;
     const std::vector<SP<IKeyboard>>&            keyboards() const;
 
