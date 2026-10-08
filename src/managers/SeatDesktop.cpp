@@ -571,7 +571,9 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
         if (!surface) {
             auto current = workspace();
             window       = hitTest.windowAtWorkspace(position, current, Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
-            if (window)
+            // Secondary seats do not support Xwayland input. Reject an X11
+            // hit before calling the Wayland-only surface lookup.
+            if (window && !window->backend().isX11())
                 surface = hitTest.windowSurfaceAt(position, window, local);
         }
     }

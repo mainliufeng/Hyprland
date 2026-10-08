@@ -25,8 +25,22 @@ void CScreenshareManager::onOutputCommit(PHLMONITOR monitor) {
     }
 
     std::ranges::for_each(m_pendingFrames, [&](WP<CScreenshareFrame>& frame) {
-        if (frame.expired() || !frame->m_shared || frame->done())
+        const auto pending = frame.get();
+        if (!pending || !pending->m_shared)
             return;
+
+        // A lock transition invalidates in-flight frames. The protocol still
+        // owns the frame, so removing only our weak reference would leave the
+        // client waiting forever instead of receiving a failed capture.
+        if (pending->done()) {
+            if (!pending->m_copied && !pending->m_failed && pending->m_callback) {
+                pending->m_failed = true;
+                FScreenshareCallback callback;
+                std::swap(callback, pending->m_callback);
+                callback(RESULT_NOT_COPIED);
+            }
+            return;
+        }
 
         if (frame->m_session->monitor() != monitor)
             return;
