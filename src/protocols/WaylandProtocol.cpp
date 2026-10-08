@@ -20,8 +20,8 @@ void IWaylandProtocol::onDisplayDestroy() {
     }
 }
 
-IWaylandProtocol::IWaylandProtocol(const wl_interface* iface, const int& ver, const std::string& name) :
-    m_name(name), m_global(wl_global_create(g_pCompositor->m_wlDisplay, iface, ver, this, &bindManagerInternal)) {
+IWaylandProtocol::IWaylandProtocol(const wl_interface* iface, const int& ver, const std::string& name, PHLMONITOR outputMonitor) :
+    m_name(name), m_outputMonitor(outputMonitor), m_global(wl_global_create(g_pCompositor->m_wlDisplay, iface, ver, this, &bindManagerInternal)) {
 
     if UNLIKELY (!m_global) {
         LOG(Log::ERR, "could not create a global [{}]", m_name);
@@ -47,4 +47,8 @@ void IWaylandProtocol::removeGlobal() {
 
 wl_global* IWaylandProtocol::getGlobal() {
     return m_global;
+}
+
+PHLMONITOR IWaylandProtocol::outputMonitor() const {
+    return m_outputMonitor.lock();
 }

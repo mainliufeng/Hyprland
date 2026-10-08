@@ -1964,7 +1964,8 @@ bool CInputManager::hasHeldButtons() {
 }
 
 void CInputManager::updateCapabilities() {
-    uint32_t caps = 0;
+    const auto previous = m_capabilities;
+    uint32_t   caps     = 0;
 
     for (auto const& h : m_hids) {
         if (h.expired())
@@ -1975,6 +1976,12 @@ void CInputManager::updateCapabilities() {
 
     g_pSeatManager->updateCapabilities(caps);
     m_capabilities = caps;
+
+    // Lock surfaces can be mapped before the first human keyboard exists.
+    // newKeyboard runs before capabilities are updated, so its focus attempt
+    // is rejected. Restore lock focus once keyboard input becomes available.
+    if (g_pSessionLockManager->isSessionLocked() && (caps & HID_INPUT_CAPABILITY_KEYBOARD) && !(previous & HID_INPUT_CAPABILITY_KEYBOARD))
+        refocus();
 }
 
 const std::vector<uint32_t>& CInputManager::getKeysFromAllKBs() {

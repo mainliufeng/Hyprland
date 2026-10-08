@@ -808,11 +808,13 @@ bool CSeatDesktopRegistry::allowsGlobal(const wl_client* client, const wl_global
     const auto preferred = forClient(client);
     if (global == m_sharedPrimarySeat->getGlobal())
         return preferred != nullptr;
-    if (!preferred) {
-        for (const auto& [name, output] : PROTO::outputs) {
-            if (output->getGlobal() == global && isPrivateOutput(output->m_monitor.lock()))
-                return false;
-        }
+    // wl_global_create announces the output synchronously, before its protocol
+    // reaches PROTO::outputs. Its privacy must already be known at that point;
+    // announcing it and rejecting the later bind kills existing clients.
+    if (!preferred && wl_global_get_interface(global) == &wl_output_interface) {
+        const auto protocol = sc<IWaylandProtocol*>(wl_global_get_user_data(global));
+        if (protocol && isPrivateOutput(protocol->outputMonitor()))
+            return false;
     }
     if (preferred && PROTO::humanLock && PROTO::humanLock->getGlobal() == global)
         return false;
@@ -879,8 +881,10 @@ std::string CSeatDesktopRegistry::registerPrivateOutput(PHLMONITOR monitor) {
         return "output policy cannot change while locked";
     if (!monitor || !monitor->m_createdByUser || !monitor->m_output || monitor->m_output->getBackend()->type() != Aquamarine::AQ_BACKEND_HEADLESS)
         return "only managed headless outputs can be private";
+    // An already announced wl_output cannot safely become unavailable on bind.
+    // Privacy is fixed before the global is created, not retrofitted afterward.
     if (!isPrivateOutput(monitor))
-        m_privateOutputs.emplace_back(monitor);
+        return "output privacy must be set at creation; use seat create-private-output";
     return "ok";
 }
 

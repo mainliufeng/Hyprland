@@ -6,6 +6,7 @@
 #include "../../debug/log/Logger.hpp"
 #include "../../workspace/HLWorkspace.hpp"
 #include "../../output/Monitor.hpp"
+#include "../../managers/SeatDesktop.hpp"
 #include "../MonitorState.hpp"
 #include "PlacementController.hpp"
 #include "Resolver.hpp"
@@ -85,7 +86,11 @@ class CHyprlandPolicyContext final : public IPolicyContext {
         if (!MONITOR)
             return std::nullopt;
 
-        const auto CONFIGURED = Config::workspaceRuleMgr()->getDefaultWorkspaceFor(*MONITOR);
+        // Private outputs must never allocate the next unused human number
+        // (e.g. 1, 3, 4) while the broker is still setting up the agent seat.
+        auto CONFIGURED = Config::workspaceRuleMgr()->getDefaultWorkspaceFor(*MONITOR);
+        if (CONFIGURED.empty() && g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->isPrivateOutput(MONITOR))
+            CONFIGURED = "name:" + MONITOR->m_name;
         if (CONFIGURED.empty())
             return std::nullopt;
 
