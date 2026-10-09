@@ -83,6 +83,7 @@ class CSeatDesktop {
     UP<Config::Actions::CActionState>&           actionState();
     void                                         attachKeyboard(SP<IKeyboard> keyboard);
     void                                         attachPointer(SP<IPointer> pointer);
+    bool                                         canFocusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr, bool allowFullscreenBlocked = false) const;
     void                                         focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr);
     void                                         refocus(uint32_t timeMs = 0, bool keyboard = false);
     std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false);
@@ -93,6 +94,7 @@ class CSeatDesktop {
     friend class CSeatPresentation;
     static int                                           acceptClient(int fd, uint32_t mask, void* data);
     void                                                 updateCapabilities();
+    void                                                 listenWorkspaceMonitorChanges();
     void                                                 keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard, bool native = false);
     void                                                 keyboardModifiers(SP<IKeyboard> keyboard, bool native = false);
     void                                                 move(const IPointer::SMotionEvent& event);
@@ -134,6 +136,7 @@ class CSeatDesktop {
     std::vector<SP<IPointer>>                            m_pointers;
     std::vector<uint32_t>                                m_buttons;
     std::unordered_map<IPointer*, std::vector<uint32_t>> m_deviceButtons;
+    CHyprSignalListener                                  m_workspaceMonitorChanged;
     CHyprSignalListener                                  m_windowUnmap;
     CHyprSignalListener                                  m_windowDestroy;
     std::vector<CHyprSignalListener>                     m_listeners;

@@ -1,4 +1,5 @@
 #include "../../../managers/SeatDesktop.hpp"
+#include "../../../managers/SeatActionContext.hpp"
 #include "../../../managers/SeatPresentation.hpp"
 #include "../../../protocols/core/Seat.hpp"
 #include "../../../managers/SeatManager.hpp"
@@ -62,6 +63,7 @@
 #include "../../../ipc/s2/S2.hpp"
 #include "../../../managers/input/InputManager.hpp"
 #include "../../../pointer/PointerController.hpp"
+#include "../../../pointer/PointerManager.hpp"
 #include "../../../managers/fullscreen/FullscreenController.hpp"
 #include "../../../layout/algorithm/Algorithm.hpp"
 #include "../../../layout/space/Space.hpp"
@@ -841,12 +843,10 @@ void CWindow::activateForSeat(CSeatDesktop* seat, bool force) {
     if (m_target->floating())
         Desktop::windowState()->raise(m_self.lock());
 
-    if (seat)
-        seat->focusWindow(m_self.lock());
-    else {
-        Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    SeatInput::CActionScope actionScope(seat);
+    Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    if (!seat)
         warpCursor();
-    }
 }
 
 void CWindow::onUpdateState(const SBackendStateRequest& request) {
@@ -1633,7 +1633,12 @@ void CWindow::unmapWindow() {
         return;
     }
 
-    const auto PMONITOR = m_monitor.lock();
+    const auto                 PMONITOR = m_monitor.lock();
+    std::vector<CSeatDesktop*> focusedSeats;
+    for (const auto& seat : g_pSeatDesktopRegistry->seats()) {
+        if (seat->active() && seat->window() == m_self)
+            focusedSeats.emplace_back(seat.get());
+    }
 
     m_events.unmap.emit();
     IPC::Socket2::sock()->postEvent({"closewindow", std::format("{:x}", m_self.lock())});
@@ -1698,23 +1703,26 @@ void CWindow::unmapWindow() {
     // do this after onWindowRemoved because otherwise it'll think the window is invalid
     m_isMapped = false;
 
-    // refocus on a new window if needed
-    if (wasLastWindow) {
-        static auto FOCUSONCLOSE = CConfigValue<Config::INTEGER>("input:focus_on_close");
-        PHLWINDOW   candidate    = nextInGroup;
+    // All seats use the native close policy after fullscreen and layout
+    // removal. Only pointer lookup and focus delivery depend on the seat.
+    const auto refocusAfterClose = [&](CSeatDesktop* seat) {
+        SeatInput::CActionScope actionScope(seat);
+        static auto             FOCUSONCLOSE = CConfigValue<Config::INTEGER>("input:focus_on_close");
+        PHLWINDOW               candidate    = nextInGroup;
 
         if (!candidate) {
-            if (*FOCUSONCLOSE == 1)
-                candidate = (Desktop::viewState()->hitTest().windowAt(g_pInputManager->getMouseCoordsInternal(),
-                                                                      Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING));
-            else {
+            if (*FOCUSONCLOSE == 1) {
+                const auto properties = Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING;
+                candidate             = seat ? Desktop::viewState()->hitTest().windowAtWorkspace(seat->pointer()->position(), seat->workspace(), properties) :
+                                               Desktop::viewState()->hitTest().windowAt(g_pInputManager->getMouseCoordsInternal(), properties);
+            } else {
                 const auto CAND = g_layoutManager->getNextCandidate(m_workspace->space(), layoutTarget());
                 if (CAND)
                     candidate = CAND->window();
             }
         }
 
-        if (candidate && PMONITOR && PMONITOR->m_activeSpecialWorkspace && candidate->m_workspace != PMONITOR->m_activeSpecialWorkspace)
+        if (!seat && candidate && PMONITOR && PMONITOR->m_activeSpecialWorkspace && candidate->m_workspace != PMONITOR->m_activeSpecialWorkspace)
             candidate = nullptr;
 
         LOG(Log::DEBUG, "On closed window, new focused candidate is {}", candidate);
@@ -1730,6 +1738,14 @@ void CWindow::unmapWindow() {
                 Fullscreen::controller()->setFullscreenMode(candidate, CURRENT_WINDOW_FS_MODES.internal, std::nullopt, CURRENT_FS_LAYOUT_HANDLED);
         }
 
+        if (seat) {
+            if (!candidate)
+                seat->refocus(0, true);
+            else
+                seat->refocus();
+            return;
+        }
+
         if (!candidate && m_workspace && (m_workspace->getWindowCount() == 0 || PMONITOR->m_activeSpecialWorkspace))
             g_pInputManager->refocus();
 
@@ -1742,9 +1758,15 @@ void CWindow::unmapWindow() {
 
             Event::bus()->m_events.window.active.emit(m_self.lock(), FOCUS_REASON_OTHER);
         }
-    } else {
-        LOG(Log::DEBUG, "Unmapped was not focused, ignoring a refocus.");
+    };
+    if (wasLastWindow)
+        refocusAfterClose(nullptr);
+    for (const auto seat : focusedSeats) {
+        if (seat->inputAllowed() && seat->workspace() == m_workspace)
+            refocusAfterClose(seat);
     }
+    if (!wasLastWindow && focusedSeats.empty())
+        LOG(Log::DEBUG, "Unmapped was not focused, ignoring a refocus.");
 
     if (!m_backend->traits().suggestsNoBorder)                              // don't animate out if they weren't animated in.
         *m_realPosition = m_realPosition->value() + Vector2D(0.01f, 0.01f); // it has to be animated, otherwise CesktopAnimationManager will ignore it

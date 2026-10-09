@@ -1534,87 +1534,113 @@ ActionResult Actions::denyWindowFromGroup(eTogglableAction action) {
     return {};
 }
 
+static Vector2D seatPointerSurfaceLocal(CSeatDesktop* seat, SP<CWLSurfaceResource> surface) {
+    const auto OWNER = Desktop::View::CWLSurface::fromResource(surface);
+    const auto BOX   = OWNER ? OWNER->getSurfaceBoxGlobal() : std::nullopt;
+    return BOX ? seat->pointer()->position() - BOX->pos() : Vector2D{};
+}
+
 ActionResult Actions::pass(std::optional<PHLWINDOW> w) {
-    auto window = xtract(w);
+    const auto SEAT    = SeatInput::current();
+    const auto MANAGER = SEAT ? SEAT->manager() : g_pSeatManager.get();
+    auto       window  = xtract(w);
     if (!window)
         return {};
 
-    if (!g_pSeatManager->m_keyboard)
+    if (SEAT && window->backend().isX11())
+        return actionError("Secondary seats cannot forward input to Xwayland windows", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_ARGUMENT);
+
+    if (!MANAGER->m_keyboard)
         return actionError("No keyboard connected", eActionErrorLevel::INFO, eActionErrorCode::NO_TARGET);
 
-    const auto& S             = *Config::Actions::state();
-    const auto  XWTOXW        = window->backend().isX11() && Desktop::focusState()->window() && Desktop::focusState()->window()->backend().isX11();
-    const auto  LASTMOUSESURF = g_pSeatManager->m_state.pointerFocus.lock();
-    const auto  LASTKBSURF    = g_pSeatManager->m_state.keyboardFocus.lock();
+    const auto& S              = *Config::Actions::state();
+    const auto  XWTOXW         = window->backend().isX11() && Desktop::focusState()->window() && Desktop::focusState()->window()->backend().isX11();
+    const auto  LASTMOUSESURF  = MANAGER->m_state.pointerFocus.lock();
+    const auto  LASTKBSURF     = MANAGER->m_state.keyboardFocus.lock();
+    const auto  LASTMOUSELOCAL = SEAT ? seatPointerSurfaceLocal(SEAT, LASTMOUSESURF) : Vector2D{};
 
     if (!XWTOXW) {
         if (S.m_lastCode != 0)
-            g_pSeatManager->setKeyboardFocus(window->wlSurface()->resource());
+            MANAGER->setKeyboardFocus(window->wlSurface()->resource());
         else
-            g_pSeatManager->setPointerFocus(window->wlSurface()->resource(), {1, 1});
+            MANAGER->setPointerFocus(window->wlSurface()->resource(), {1, 1});
     }
 
-    g_pSeatManager->sendKeyboardMods(g_pInputManager->hyprlandModsToXkb(g_pSeatManager->m_keyboard.lock(), g_pInputManager->getModsFromAllKBs()), 0, 0, 0);
+    if (SEAT) {
+        const auto mods = MANAGER->m_keyboard->m_modifiersState;
+        MANAGER->sendKeyboardMods(mods.depressed, mods.latched, mods.locked, mods.group);
+    } else
+        MANAGER->sendKeyboardMods(g_pInputManager->hyprlandModsToXkb(MANAGER->m_keyboard.lock(), g_pInputManager->getModsFromAllKBs()), 0, 0, 0);
 
     if (S.m_passPressed == 1) {
         if (S.m_lastCode != 0)
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
         else
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_PRESSED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_PRESSED);
     } else if (S.m_passPressed == 0) {
         if (S.m_lastCode != 0)
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
         else
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_RELEASED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_RELEASED);
     } else {
         if (S.m_lastCode != 0) {
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, S.m_lastCode - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
         } else {
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_PRESSED);
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_RELEASED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_PRESSED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, S.m_lastMouseCode, WL_POINTER_BUTTON_STATE_RELEASED);
         }
     }
+
+    if (SEAT && S.m_lastCode == 0)
+        MANAGER->sendPointerFrame();
 
     if (XWTOXW)
         return {};
 
     if (window->backend().isX11()) {
         if (S.m_lastCode != 0) {
-            g_pSeatManager->m_state.keyboardFocus.reset();
-            g_pSeatManager->m_state.keyboardFocusResource.reset();
+            MANAGER->m_state.keyboardFocus.reset();
+            MANAGER->m_state.keyboardFocusResource.reset();
         } else {
-            g_pSeatManager->m_state.pointerFocus.reset();
-            g_pSeatManager->m_state.pointerFocusResource.reset();
+            MANAGER->m_state.pointerFocus.reset();
+            MANAGER->m_state.pointerFocusResource.reset();
         }
     }
 
-    const auto SL = window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - g_pInputManager->getMouseCoordsInternal();
+    const auto SL = SEAT ? LASTMOUSELOCAL : window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - g_pInputManager->getMouseCoordsInternal();
 
     if (S.m_lastCode != 0)
-        g_pSeatManager->setKeyboardFocus(LASTKBSURF);
+        MANAGER->setKeyboardFocus(LASTKBSURF);
     else
-        g_pSeatManager->setPointerFocus(LASTMOUSESURF, SL);
+        MANAGER->setPointerFocus(LASTMOUSESURF, SL);
 
     return {};
 }
 
 ActionResult Actions::pass(Input::ModifierMask modMask, uint32_t key, std::optional<PHLWINDOW> w) {
-    auto       window = xtract(w);
+    const auto SEAT    = SeatInput::current();
+    const auto MANAGER = SEAT ? SEAT->manager() : g_pSeatManager.get();
+    auto       window  = xtract(w);
+
+    if (SEAT && window && window->backend().isX11())
+        return actionError("Secondary seats cannot forward input to Xwayland windows", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_ARGUMENT);
 
     const bool isMouse = key >= 272 && key < 0x160; // mouse button range
 
-    if (!g_pSeatManager->m_keyboard && !isMouse)
+    if (!MANAGER->m_keyboard && !isMouse)
         return actionError("No keyboard connected", eActionErrorLevel::INFO, eActionErrorCode::NO_TARGET);
 
-    const auto& S           = *Config::Actions::state();
-    const auto  LASTSURFACE = Desktop::focusState()->surface();
+    const auto& S              = *Config::Actions::state();
+    const auto  LASTSURFACE    = SEAT && isMouse ? MANAGER->m_state.pointerFocus.lock() : Desktop::focusState()->surface();
+    const auto  LASTMOUSELOCAL = SEAT && isMouse ? seatPointerSurfaceLocal(SEAT, LASTSURFACE) : Vector2D{};
+    const auto  PREVIOUSMODS   = MANAGER->m_keyboard ? MANAGER->m_keyboard->m_modifiersState : decltype(MANAGER->m_keyboard->m_modifiersState){};
 
     if (window) {
         if (!isMouse)
-            g_pSeatManager->setKeyboardFocus(window->wlSurface()->resource());
+            MANAGER->setKeyboardFocus(window->wlSurface()->resource());
         else
-            g_pSeatManager->setPointerFocus(window->wlSurface()->resource(), {1, 1});
+            MANAGER->setPointerFocus(window->wlSurface()->resource(), {1, 1});
 
         // if wl -> xwl, activate destination
         if (window->backend().isX11() && Desktop::focusState()->window() && !Desktop::focusState()->window()->backend().isX11())
@@ -1624,49 +1650,55 @@ ActionResult Actions::pass(Input::ModifierMask modMask, uint32_t key, std::optio
             window = nullptr;
     }
 
-    g_pSeatManager->sendKeyboardMods(g_pSeatManager->m_keyboard ? g_pInputManager->hyprlandModsToXkb(g_pSeatManager->m_keyboard.lock(), modMask) : 0, 0, 0, 0);
+    MANAGER->sendKeyboardMods(MANAGER->m_keyboard ? g_pInputManager->hyprlandModsToXkb(MANAGER->m_keyboard.lock(), modMask) : 0, 0, 0, 0);
 
     if (S.m_passPressed == 1) {
         if (!isMouse)
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
         else
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_PRESSED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_PRESSED);
     } else if (S.m_passPressed == 0) {
         if (!isMouse)
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
         else
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_RELEASED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_RELEASED);
     } else {
         if (!isMouse) {
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
-            g_pSeatManager->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+            MANAGER->sendKeyboardKey(S.m_timeLastMs, key - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
         } else {
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_PRESSED);
-            g_pSeatManager->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_RELEASED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_PRESSED);
+            MANAGER->sendPointerButton(S.m_timeLastMs, key, WL_POINTER_BUTTON_STATE_RELEASED);
         }
     }
 
-    g_pSeatManager->sendKeyboardMods(0, 0, 0, 0);
+    if (SEAT && isMouse)
+        MANAGER->sendPointerFrame();
+
+    if (SEAT)
+        MANAGER->sendKeyboardMods(PREVIOUSMODS.depressed, PREVIOUSMODS.latched, PREVIOUSMODS.locked, PREVIOUSMODS.group);
+    else
+        MANAGER->sendKeyboardMods(0, 0, 0, 0);
 
     if (!window)
         return {};
 
     if (window->backend().isX11()) {
         if (!isMouse) {
-            g_pSeatManager->m_state.keyboardFocus.reset();
-            g_pSeatManager->m_state.keyboardFocusResource.reset();
+            MANAGER->m_state.keyboardFocus.reset();
+            MANAGER->m_state.keyboardFocusResource.reset();
         } else {
-            g_pSeatManager->m_state.pointerFocus.reset();
-            g_pSeatManager->m_state.pointerFocusResource.reset();
+            MANAGER->m_state.pointerFocus.reset();
+            MANAGER->m_state.pointerFocusResource.reset();
         }
     }
 
-    const auto SL = window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - g_pInputManager->getMouseCoordsInternal();
+    const auto SL = SEAT ? LASTMOUSELOCAL : window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - g_pInputManager->getMouseCoordsInternal();
 
     if (!isMouse)
-        g_pSeatManager->setKeyboardFocus(LASTSURFACE);
+        MANAGER->setKeyboardFocus(LASTSURFACE);
     else
-        g_pSeatManager->setPointerFocus(LASTSURFACE, SL);
+        MANAGER->setPointerFocus(LASTSURFACE, SL);
 
     return {};
 }

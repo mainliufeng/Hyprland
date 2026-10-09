@@ -76,6 +76,10 @@ static SFullscreenWorkspaceFocusResult onFullscreenWorkspaceFocusWindow(PHLWINDO
 }
 
 void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface, bool forceFSCycle) {
+    // Validate the seat's destination before a fullscreen policy can mutate
+    // windows on another workspace or a focus grab can reject the request.
+    if (const auto seat = SeatInput::current(); seat && !seat->canFocusWindow(pWindow, surface, true))
+        return;
     if (pWindow) {
         if (!pWindow->m_workspace)
             return;

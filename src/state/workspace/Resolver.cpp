@@ -6,6 +6,8 @@
 #include "../../desktop/history/WorkspaceHistoryTracker.hpp"
 #include "../../config/shared/workspace/WorkspaceRuleManager.hpp"
 #include "../MonitorState.hpp"
+#include "../../managers/SeatActionContext.hpp"
+#include "../../managers/SeatDesktop.hpp"
 
 #include <hyprutils/string/Numeric.hpp>
 #include <hyprutils/string/String.hpp>
@@ -125,6 +127,10 @@ static std::optional<int64_t> offsetAvailableWorkspace(uint32_t current, int64_t
 // fallback: named or ID'd workspace
 State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const std::string& in, std::optional<PHLMONITOR> baseMon) {
     const auto BASEMONITOR = baseMon.value_or(Desktop::focusState()->monitor());
+    // Explicit monitor selectors retain their monitor context. Ordinary
+    // dispatchers resolve relative targets from the acting seat's own view.
+    const auto SEAT             = SeatInput::current();
+    const auto CURRENTWORKSPACE = !baseMon && SEAT ? SEAT->workspace() : BASEMONITOR ? BASEMONITOR->m_activeWorkspace : nullptr;
     if (in.empty())
         return {};
 
@@ -169,7 +175,7 @@ State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const
             }
         }
 
-        int64_t id = NEXT && BASEMONITOR->m_activeWorkspace && BASEMONITOR->m_activeWorkspace->numberedID() ? *BASEMONITOR->m_activeWorkspace->numberedID() : 0;
+        int64_t id = NEXT && CURRENTWORKSPACE && CURRENTWORKSPACE->numberedID() ? *CURRENTWORKSPACE->numberedID() : 0;
         while (++id <= UINT32_MAX) {
             const auto WORKSPACE = State::Workspace::state()->query().numbered(::Workspace::SWorkspaceNumberedID{sc<uint32_t>(id)}).run();
             if (!unavailable.contains(id) && (!WORKSPACE || WORKSPACE->getWindowCount() == 0))
@@ -179,24 +185,24 @@ State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const
     }
 
     if (in == "prev" || in == "previous") {
-        if (!BASEMONITOR || !valid(BASEMONITOR->m_activeWorkspace))
+        if (!BASEMONITOR || !valid(CURRENTWORKSPACE))
             return {};
-        return Desktop::History::workspaceTracker()->previousWorkspace(BASEMONITOR->m_activeWorkspace).target;
+        return Desktop::History::workspaceTracker()->previousWorkspace(CURRENTWORKSPACE).target;
     }
 
     if (in == "previous_per_monitor") {
-        if (!BASEMONITOR || !valid(BASEMONITOR->m_activeWorkspace))
+        if (!BASEMONITOR || !valid(CURRENTWORKSPACE))
             return {};
-        return Desktop::History::workspaceTracker()->previousWorkspace(BASEMONITOR->m_activeWorkspace, BASEMONITOR).target;
+        return Desktop::History::workspaceTracker()->previousWorkspace(CURRENTWORKSPACE, BASEMONITOR).target;
     }
 
     if (in == "next") {
-        if (!BASEMONITOR || !BASEMONITOR->m_activeWorkspace) {
+        if (!BASEMONITOR || !CURRENTWORKSPACE) {
             LOG(Log::ERR, "no active monitor or workspace for 'next'");
             return {};
         }
 
-        const auto CURRENT = BASEMONITOR->m_activeWorkspace->numberedID();
+        const auto CURRENT = CURRENTWORKSPACE->numberedID();
         return CURRENT && *CURRENT < UINT32_MAX ? numberedTarget(*CURRENT + 1) : State::Workspace::STarget{};
     }
 
@@ -244,9 +250,9 @@ State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const
             return ID ? numberedTarget(*ID) : State::Workspace::STarget{};
         }
 
-        const auto ACTIVE_NUMBERED = BASEMONITOR->m_activeWorkspace ? BASEMONITOR->m_activeWorkspace->numberedID() : std::optional<::Workspace::WorkspaceIDContainer>{1};
+        const auto ACTIVE_NUMBERED = CURRENTWORKSPACE ? CURRENTWORKSPACE->numberedID() : std::optional<::Workspace::WorkspaceIDContainer>{1};
         if (!ACTIVE_NUMBERED) {
-            const auto CURRENT = std::ranges::find(named, BASEMONITOR->m_activeWorkspace);
+            const auto CURRENT = std::ranges::find(named, CURRENTWORKSPACE);
             auto       index   = CURRENT == named.end() ? sc<int64_t>(named.size()) : sc<int64_t>(std::ranges::distance(named.begin(), CURRENT));
             index += remains;
             if (index < 0)
@@ -290,7 +296,7 @@ State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const
 
         auto index = sc<int64_t>(*OFFSET) - (ABSOLUTE ? 1 : 0);
         if (!ABSOLUTE) {
-            const auto CURRENT = std::ranges::find(named, BASEMONITOR->m_activeWorkspace);
+            const auto CURRENT = std::ranges::find(named, CURRENTWORKSPACE);
             index += CURRENT == named.end() ? 0 : std::ranges::distance(named.begin(), CURRENT);
             index %= sc<int64_t>(named.size());
             if (index < 0)
@@ -302,7 +308,7 @@ State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const
     }
 
     if (in[0] == '+' || in[0] == '-') {
-        if (!BASEMONITOR || !BASEMONITOR->m_activeWorkspace || !BASEMONITOR->m_activeWorkspace->numberedID()) {
+        if (!BASEMONITOR || !CURRENTWORKSPACE || !CURRENTWORKSPACE->numberedID()) {
             LOG(Log::ERR, "Relative workspace on no numbered workspace!");
             return {};
         }
@@ -310,7 +316,7 @@ State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const
         const auto OFFSET = workspaceOffset(in);
         if (!OFFSET)
             return {};
-        const auto VALUE = sc<int64_t>(*BASEMONITOR->m_activeWorkspace->numberedID()) + *OFFSET;
+        const auto VALUE = sc<int64_t>(*CURRENTWORKSPACE->numberedID()) + *OFFSET;
         return numberedTarget(std::max(VALUE, sc<int64_t>(1)));
     }
 

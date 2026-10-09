@@ -1,8 +1,11 @@
 #include "ForeignToplevelWlr.hpp"
 #include "core/Output.hpp"
+#include "core/Seat.hpp"
 #include <algorithm>
 #include "../Compositor.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatManager.hpp"
 #include "../managers/fullscreen/FullscreenController.hpp"
 #include "../desktop/state/FocusState.hpp"
 #include "../desktop/state/GlobalWindowController.hpp"
@@ -26,10 +29,19 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
+        const auto REQUESTEDSEAT = CWLSeatResource::fromResource(seat);
+        if (!REQUESTEDSEAT || REQUESTEDSEAT->client() != p->client() || !REQUESTEDSEAT->manager())
+            return;
+
+        const auto DESKTOP = REQUESTEDSEAT->manager()->m_desktop;
+        if (DESKTOP ? !DESKTOP->inputAllowed() : REQUESTEDSEAT->manager() != g_pSeatManager.get())
+            return;
+
         // these requests bypass the config'd stuff cuz it's usually like
         // window switchers and shit
-        PWINDOW->activate(true);
-        g_pInputManager->simulateMouseMovement();
+        PWINDOW->activateForSeat(DESKTOP, true);
+        if (!DESKTOP)
+            g_pInputManager->simulateMouseMovement();
     });
 
     m_resource->setSetFullscreen([this](CZwlrForeignToplevelHandleV1* p, wl_resource* output) {

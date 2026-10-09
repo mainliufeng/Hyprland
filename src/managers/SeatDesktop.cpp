@@ -154,6 +154,7 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
     if (!m_socketSource)
         throw std::runtime_error("registering seat socket failed");
     ready = true;
+    listenWorkspaceMonitorChanges();
 }
 
 CSeatDesktop::~CSeatDesktop() {
@@ -165,6 +166,7 @@ CSeatDesktop::~CSeatDesktop() {
         std::filesystem::remove(m_socketPath, error);
     }
     m_inputClients.clear();
+    m_workspaceMonitorChanged.reset();
     m_listeners.clear();
     m_keyboards.clear();
     m_pointers.clear();
@@ -317,6 +319,7 @@ void CSeatDesktop::retire() {
     m_pointer->resetCursorImage();
     m_protocol->removeGlobal();
     // Removing an input seat does not remove shared applications or workspaces.
+    m_workspaceMonitorChanged.reset();
     m_workspace.reset();
 }
 
@@ -605,13 +608,25 @@ void CSeatDesktop::axis(const IPointer::SAxisEvent& event) {
                                static_cast<int32_t>(std::round(value120 * factor)), event.source, event.relativeDirection);
 }
 
-void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface) {
-    if (window &&
-        (!inputAllowed() || window->backend().isX11() || !window->mapped() || window->isHidden() || !window->acceptsInput() || window->shouldntFocus() ||
-         window->m_ruleApplicator->noFocus().valueOrDefault() || window->m_workspace != workspace()))
-        return;
+bool CSeatDesktop::canFocusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface, bool allowFullscreenBlocked) const {
+    if (!window)
+        return true;
+    if (!inputAllowed() || window->backend().isX11() || !window->mapped() || window->isHidden() || window->shouldntFocus() ||
+        window->m_ruleApplicator->noFocus().valueOrDefault() || window->m_workspace != workspace())
+        return false;
+    // Full focus resolves this one block through the native fullscreen policy.
+    // Other input blocks must not cause policy changes before focus is refused.
+    if (allowFullscreenBlocked ? window->hasInputBlockedReasonsBesides(Desktop::View::FOCUS_BLOCK_BELOW_FULLSCREEN) : !window->acceptsInput())
+        return false;
     static auto modalBlocking = CConfigValue<Config::INTEGER>("general:modal_parent_blocking");
-    if (window && *modalBlocking && window->backend().traits().hasModalChild)
+    if (*modalBlocking && window->backend().traits().hasModalChild)
+        return false;
+    const auto target = surface ? surface : window->wlSurface()->resource();
+    return target && (!m_manager->m_seatGrab || m_manager->m_seatGrab->accepts(target));
+}
+
+void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface) {
+    if (!canFocusWindow(window, surface))
         return;
     auto previous = m_window.lock();
     m_windowUnmap.reset();
@@ -627,22 +642,15 @@ void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface)
     }
     m_manager->setKeyboardFocus(window ? (surface ? surface : window->wlSurface()->resource()) : nullptr);
     if (window) {
-        auto removed = [this, disappearing = PHLWINDOWREF{window}] {
+        auto removed = [this] {
+            // Native unmap chooses the next focus after removing fullscreen and
+            // layout state. Clear stale surfaces here without preempting it.
             focusWindow(nullptr);
-            if (inputAllowed()) {
-                auto current = workspace();
-                for (const auto& candidate : Desktop::windowState()->windows()) {
-                    if (candidate != disappearing && candidate->mapped() && !candidate->isHidden() && candidate->m_workspace == current) {
-                        focusWindow(candidate);
-                        if (m_window)
-                            break;
-                    }
-                }
-                m_manager->setPointerFocus(nullptr, {});
-            }
+            m_manager->setPointerFocus(nullptr, {});
         };
         m_windowUnmap   = window->m_events.unmap.listen(removed);
         m_windowDestroy = window->m_events.destroy.listen(removed);
+        window->m_hints &= ~Desktop::View::WINDOW_HINT_URGENT;
         window->backend().setActive(true);
         window->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_FOCUS);
         window->presentation().refreshValues();
@@ -726,6 +734,29 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
     }
 }
 
+void CSeatDesktop::listenWorkspaceMonitorChanges() {
+    m_workspaceMonitorChanged.reset();
+    if (!m_workspace)
+        return;
+    m_workspaceMonitorChanged = m_workspace->m_events.monitorChanged.listen([this] {
+        const auto previous = monitor();
+        const auto current  = m_workspace ? m_workspace->m_monitor.lock() : nullptr;
+        if (!current || current == previous)
+            return;
+        const auto local = m_pointer->position() - (previous ? previous->m_position : Vector2D{});
+        m_monitor        = current;
+        ++m_viewEpoch;
+        m_pointer->bindMonitor(current);
+        m_pointer->warpTo(current->m_position + local);
+        m_manager->setPointerFocus(nullptr, {});
+        // Following a moved workspace updates only this seat's source view;
+        // it never changes a physical output's active workspace or focus.
+        g_pHyprRenderer->damageMonitor(previous);
+        g_pHyprRenderer->damageMonitor(current);
+        IPC::Socket2::sock()->postEvent({"seatworkspace", protocol()->seatName() + "," + m_workspace->addressableName()});
+    });
+}
+
 std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly) {
     if (!inputAllowed() && (!viewOnly || !active() || g_pSessionLockManager->isSessionLocked()))
         return "seat is unavailable or session is locked";
@@ -754,7 +785,8 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly
     const auto oldMonitor = monitor();
     ++m_viewEpoch;
     m_workspace = current;
-    m_monitor   = current->m_monitor.lock();
+    listenWorkspaceMonitorChanges();
+    m_monitor = current->m_monitor.lock();
     m_pointer->bindMonitor(monitor());
     if (oldMonitor != monitor())
         m_pointer->warpTo(monitor()->m_position + monitor()->m_size / 2.0);
