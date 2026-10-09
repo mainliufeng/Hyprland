@@ -97,6 +97,7 @@ std::string CSeatPresentation::show(const std::string& name, const std::string& 
     m_workspace = view;
     m_heartbeat = Time::steadyNow();
     g_pHyprRenderer->damageMonitor(monitor);
+    IPC::Socket2::sock()->postEvent({"seatpresentation", m_name + "," + workspace()->addressableName()});
     return status(owner);
 }
 std::string CSeatPresentation::status(const std::string& owner, bool renew) {
@@ -133,6 +134,7 @@ std::string CSeatPresentation::control(const std::string& owner, bool enabled) {
         m_control    = enabled;
         m_generation = s->controlGeneration();
         pointerMotion(Time::millis(Time::steadyNow()));
+        IPC::Socket2::sock()->postEvent({"seatpresentation", m_name + "," + workspace()->addressableName()});
     }
     return status(owner);
 }
@@ -157,8 +159,9 @@ void CSeatPresentation::clear() {
             g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), button, WL_POINTER_BUTTON_STATE_RELEASED);
     m_overlayKeys.clear();
     m_buttonOwners.clear();
-    m_control = false;
-    m_overlay = false;
+    const auto previousName = m_name;
+    m_control               = false;
+    m_overlay               = false;
     m_owner.clear();
     m_name.clear();
     m_workspace.reset();
@@ -173,6 +176,7 @@ void CSeatPresentation::clear() {
     }
     if (monitor)
         g_pHyprRenderer->damageMonitor(monitor);
+    IPC::Socket2::sock()->postEvent({"seatpresentation", previousName + ","});
 }
 void CSeatPresentation::validate() {
     if (m_owner.empty())
@@ -202,8 +206,9 @@ bool CSeatPresentation::overlayFocus(uint32_t time) {
     std::vector<PHLLSREF> layers;
     for (const auto& plane : output()->m_layerSurfaceLayers)
         for (const auto& ref : plane)
-            if (const auto layer = ref.lock();
-                layer && (layer->m_namespace == "cornice-bar" || layer->m_namespace == "cornice-desktop-menu" || layer->m_namespace == "cornice-agent-prompt"))
+            if (const auto layer = ref.lock(); layer &&
+                (layer->m_namespace == "cornice-bar" || layer->m_namespace == "cornice-desktop-menu" || layer->m_namespace == "cornice-agent-prompt" ||
+                 layer->m_namespace == "hyprvoice"))
                 layers.emplace_back(ref);
     Vector2D   local;
     PHLLS      found;
@@ -390,8 +395,9 @@ bool CSeatPresentation::draw(Render::CRenderContext& ctx, PHLMONITOR target, con
     // Human control chrome remains local; application pixels never pass through Cornice.
     for (const auto& plane : target->m_layerSurfaceLayers)
         for (const auto& ref : plane)
-            if (const auto layer = ref.lock();
-                layer && (layer->m_namespace == "cornice-bar" || layer->m_namespace == "cornice-desktop-menu" || layer->m_namespace == "cornice-agent-prompt"))
+            if (const auto layer = ref.lock(); layer &&
+                (layer->m_namespace == "cornice-bar" || layer->m_namespace == "cornice-desktop-menu" || layer->m_namespace == "cornice-agent-prompt" ||
+                 layer->m_namespace == "hyprvoice"))
                 g_pHyprRenderer->renderLayer(ctx, layer, target, now);
     for (const auto& popup : g_pInputManager->m_relay.popups())
         if (popup->shouldBeRendered())

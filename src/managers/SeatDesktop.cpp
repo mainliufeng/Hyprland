@@ -73,7 +73,11 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
     m_protocol           = makeUnique<CWLSeatProtocol>(&wl_seat_interface, 9, "WLSeat-" + name, name);
     m_manager            = makeUnique<CSeatManager>(m_protocol.get());
     m_manager->m_desktop = this;
-    m_relay              = makeUnique<CInputMethodRelay>(m_manager.get());
+    m_listeners.emplace_back(m_manager->m_events.keyboardFocusChange.listen([this] {
+        ++m_focusEpoch;
+        IPC::Socket2::sock()->postEvent({"seatinputfocus", protocol()->seatName() + "," + inputFocusToken()});
+    }));
+    m_relay = makeUnique<CInputMethodRelay>(m_manager.get());
     m_listeners.emplace_back(m_manager->m_events.dndPointerFocusChange.listen([this] { PROTO::data->onDndPointerFocus(m_manager.get()); }));
     m_pointer = makeUnique<Pointer::CPointerManager>(true);
     m_pointer->bindMonitor(monitor);
@@ -220,6 +224,14 @@ bool CSeatDesktop::paused() const {
 
 uint64_t CSeatDesktop::viewEpoch() const {
     return m_viewEpoch;
+}
+
+uint64_t CSeatDesktop::focusEpoch() const {
+    return m_focusEpoch;
+}
+
+std::string CSeatDesktop::inputFocusToken() const {
+    return std::format("{}:{}:{}:{}", socketName(), controlGeneration(), viewEpoch(), focusEpoch());
 }
 
 uint64_t CSeatDesktop::controlGeneration() const {
@@ -754,6 +766,12 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly
     }
     focusWindow(current->getFocusCandidate());
     refocus();
+    // A seat's view does not activate its output workspace, so the monitor's
+    // normal workspace-change invalidation and IPC notification do not run.
+    g_pHyprRenderer->damageMonitor(oldMonitor);
+    if (oldMonitor != monitor())
+        g_pHyprRenderer->damageMonitor(monitor());
+    IPC::Socket2::sock()->postEvent({"seatworkspace", protocol()->seatName() + "," + current->addressableName()});
     return "ok";
 }
 

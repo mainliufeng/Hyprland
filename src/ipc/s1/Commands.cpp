@@ -1,5 +1,10 @@
 #include "../../managers/SeatPresentation.hpp"
 #include "../../managers/SeatActionContext.hpp"
+#include "../../managers/SeatManager.hpp"
+#include "../../ipc/s2/S2.hpp"
+#include "../../keybinds/Resolver.hpp"
+#include "../../desktop/view/Popup.hpp"
+#include "../../protocols/core/Compositor.hpp"
 #include "../../managers/SeatDesktop.hpp"
 #include "../../protocols/core/Seat.hpp"
 #include "Commands.hpp"
@@ -1984,10 +1989,132 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
                        output->m_transformedSize.y, output->m_scale, static_cast<int>(output->m_transform));
 }
 
+static uint64_t    primaryInputFocusEpoch = 1;
+
+static std::string primaryInputFocusToken() {
+    return std::format("{}:{}:{}", HL_SEAT_NAME, primaryInputFocusEpoch, g_pSessionLockManager->lockEpoch());
+}
+
+static void ensurePrimaryInputFocusListener() {
+    static auto listener = g_pSeatManager->m_events.keyboardFocusChange.listen([] {
+        ++primaryInputFocusEpoch;
+        IPC::Socket2::sock()->postEvent({"seatinputfocus", std::string{HL_SEAT_NAME} + "," + primaryInputFocusToken()});
+    });
+}
+
+struct SHumanInputTarget {
+    CSeatManager* manager = nullptr;
+    PHLWINDOW     window;
+    std::string   seatName = HL_SEAT_NAME;
+    std::string   token, reason;
+};
+
+static bool windowOwnsInputSurface(PHLWINDOW window, SP<CWLSurfaceResource> focused) {
+    if (!window || !focused || !window->wlSurface()->resource())
+        return false;
+    bool owns  = false;
+    auto visit = [&owns, &focused](SP<CWLSurfaceResource> surface, const auto&, void*) {
+        if (surface == focused)
+            owns = true;
+    };
+    window->wlSurface()->resource()->breadthfirst(visit, nullptr);
+    if (window->popupHead()) {
+        window->popupHead()->breadthfirst(
+            [&visit](SP<Desktop::View::CPopup> popup, void*) {
+                if (popup->resource())
+                    popup->resource()->breadthfirst(visit, nullptr);
+            },
+            nullptr);
+    }
+    return owns;
+}
+
+static SHumanInputTarget humanInputTarget() {
+    ensurePrimaryInputFocusListener();
+    SHumanInputTarget target;
+    if (g_pSessionLockManager->isSessionLocked()) {
+        target.reason = "session locked";
+        return target;
+    }
+    g_pSeatPresentation->validate();
+    if (g_pSeatPresentation->active()) {
+        if (!g_pSeatPresentation->controlling()) {
+            target.reason = "desktop is read only";
+            return target;
+        }
+        // The primary seat owns the native desktop's prompt and other overlays.
+        // Its hidden application must never become a fallback input target.
+        if (g_pSeatManager->m_state.keyboardFocus) {
+            target.reason = "desktop overlay has keyboard focus";
+            return target;
+        }
+        const auto seat = g_pSeatPresentation->seat();
+        if (!seat || !seat->inputAllowed()) {
+            target.reason = "controlled seat is unavailable";
+            return target;
+        }
+        target.seatName = seat->protocol()->seatName();
+        target.manager  = seat->manager();
+        target.window   = seat->window();
+        target.token    = seat->inputFocusToken();
+        if (!target.window || target.window->m_workspace != seat->workspace()) {
+            target.reason = "controlled workspace has no focused application";
+            return target;
+        }
+    } else {
+        target.manager = g_pSeatManager.get();
+        target.window  = Desktop::focusState()->window();
+        target.token   = primaryInputFocusToken();
+    }
+    if (!target.window || !target.window->mapped() || target.window->isHidden() || !target.window->acceptsInput() ||
+        !windowOwnsInputSurface(target.window, target.manager->m_state.keyboardFocus.lock())) {
+        target.reason = "keyboard focus does not belong to an application";
+        return target;
+    }
+    if (!target.manager->m_keyboard || !target.manager->m_state.keyboardFocusResource)
+        target.reason = "application keyboard is unavailable";
+    return target;
+}
+
+static std::string humanInputTargetJSON() {
+    const auto target  = humanInputTarget();
+    const auto allowed = target.reason.empty();
+    auto       window  = allowed ? CCommandFormatter::getWindowData(target.window, FORMAT_JSON) : "{}";
+    if (allowed)
+        window.pop_back(); // The shared list formatter appends a comma.
+    return std::format("{{\"allowed\":{},\"reason\":\"{}\",\"token\":\"{}\",\"seatName\":\"{}\",\"window\":{}}}", allowed, escapeJSONStrings(target.reason),
+                       allowed ? escapeJSONStrings(target.token) : "", escapeJSONStrings(target.seatName), window);
+}
+
+static std::string humanInputShortcut(const std::string& token, const std::string& mods, const std::string& key) {
+    const auto target = humanInputTarget();
+    if (!target.reason.empty())
+        return "input target unavailable: " + target.reason;
+    if (token != target.token)
+        return "stale input target";
+    if (key.starts_with("mouse:"))
+        return "input shortcut requires a keyboard key";
+    const auto keycode = Keybinds::resolver()->resolveKeycode(key);
+    if (!keycode || *keycode < 8 || *keycode > 0x2ff + 8)
+        return "invalid input shortcut key";
+    const auto keyboard = target.manager->m_keyboard.lock();
+    const auto previous = keyboard->m_modifiersState;
+    const auto now      = Time::millis(Time::steadyNow());
+    target.manager->sendKeyboardMods(g_pInputManager->hyprlandModsToXkb(keyboard, Keybinds::modMaskFromString(mods)), 0, 0, 0);
+    target.manager->sendKeyboardKey(now, *keycode - 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+    target.manager->sendKeyboardKey(now, *keycode - 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+    target.manager->sendKeyboardMods(previous.depressed, previous.latched, previous.locked, previous.group);
+    return "ok";
+}
+
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
+    if (args.size() == 2 && args[1] == "input-target")
+        return humanInputTargetJSON();
+    if (args.size() == 5 && args[1] == "input-shortcut")
+        return humanInputShortcut(args[2], args[3], args[4]);
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","human-input-target-v1"]})";
     if (args.size() == 7 && args[1] == "present")
         return g_pSeatPresentation->show(args[2], args[3], State::monitorState()->query().name(args[4]).run(), args[5], args[6]);
     if (args.size() == 3 && args[1] == "presentation")

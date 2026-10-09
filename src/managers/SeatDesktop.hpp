@@ -69,6 +69,8 @@ class CSeatDesktop {
     bool                                         captureGranted(const std::string& grant) const;
     uint64_t                                     controlGeneration() const;
     uint64_t                                     viewEpoch() const;
+    uint64_t                                     focusEpoch() const;
+    std::string                                  inputFocusToken() const;
     void                                         setPaused(bool paused, bool composedKeyboard = false);
     void                                         retire();
     const std::string&                           socketName() const;
@@ -120,6 +122,7 @@ class CSeatDesktop {
     bool                                                 m_continueOnHumanLock = false;
     uint64_t                                             m_controlGeneration   = 1;
     uint64_t                                             m_viewEpoch           = 1;
+    uint64_t                                             m_focusEpoch          = 1;
     std::unordered_map<IHID*, uint64_t>                  m_deviceGenerations;
     std::unordered_map<wl_client*, UP<SSeatInputClient>> m_inputClients;
     Hyprutils::OS::CFileDescriptor                       m_socketFd;
