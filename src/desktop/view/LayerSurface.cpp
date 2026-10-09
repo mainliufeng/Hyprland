@@ -1,6 +1,7 @@
 #include "../../managers/SessionLockManager.hpp"
 #include "../../workspace/RegularWorkspace.hpp"
 #include "../../managers/SeatDesktop.hpp"
+#include "../../managers/SeatPresentation.hpp"
 #include "LayerSurface.hpp"
 #include "../state/FocusState.hpp"
 #include "../state/FadingOutState.hpp"
@@ -295,6 +296,11 @@ void CLayerSurface::onUnmap() {
         if (seat->manager()->m_state.keyboardFocus == m_wlSurface->resource())
             seat->focusWindow(PMONITOR->m_activeWorkspace->getFocusCandidate());
         seat->refocus();
+    } else if (g_pSeatPresentation && g_pSeatPresentation->activeFor(PMONITOR)) {
+        // Native presentation keeps the human workspace's focus saved for exit.
+        // Closing a primary overlay must not restore that hidden application.
+        if (g_pSeatManager->m_state.keyboardFocus == m_wlSurface->resource())
+            g_pSeatManager->setKeyboardFocus(nullptr);
     } else {
         // refocus if needed
         //                                vvvvvvvvvvvvv if there is a last focus and the last focus is not keyboard focusable, fallback to window
@@ -433,7 +439,10 @@ void CLayerSurface::onCommit() {
             // moveMouseUnified won't focus non interactive layers but it won't unfocus them either,
             // so unfocus the surface here.
             Desktop::focusState()->rawSurfaceFocus(nullptr);
-            g_pInputManager->refocusLastWindow(m_monitor.lock());
+            if (g_pSeatPresentation && g_pSeatPresentation->activeFor(m_monitor.lock()))
+                g_pSeatManager->setKeyboardFocus(nullptr);
+            else
+                g_pInputManager->refocusLastWindow(m_monitor.lock());
         } else if (WASLASTFOCUS && WAS_KEYBOARD_EXCLUSIVE && m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND) {
             if (const auto seat = seatDesktop())
                 seat->refocus();
