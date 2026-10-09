@@ -566,8 +566,7 @@ void CWLDataDeviceProtocol::onKeyboardFocus(CSeatManager* seat) {
 }
 
 void CWLDataDeviceProtocol::onDndPointerFocus(CSeatManager* seat) {
-    seat       = seat ? seat : g_pSeatManager.get();
-    auto& drag = m_drags[seat];
+    seat = seat ? seat : g_pSeatManager.get();
     for (auto const& o : m_offers) {
         if (o->m_seat != seat)
             continue;
@@ -624,7 +623,6 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
 
     if (!seat->m_desktop) {
         drag.mouseButton = Event::bus()->m_events.input.mouse.button.listen([this, seat](IPointer::SButtonEvent e, Event::SCallbackInfo&) {
-            auto& drag = m_drags[seat];
             if (e.state == WL_POINTER_BUTTON_STATE_RELEASED) {
                 LOG(Log::DEBUG, "Dropping drag on mouseUp");
                 dropDrag(seat);
@@ -632,13 +630,11 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
         });
 
         drag.touchUp = Event::bus()->m_events.input.touch.up.listen([this, seat](ITouch::SUpEvent e, Event::SCallbackInfo&) {
-            auto& drag = m_drags[seat];
             LOG(Log::DEBUG, "Dropping drag on touchUp");
             dropDrag(seat);
         });
 
         drag.tabletTip = Event::bus()->m_events.input.tablet.tip.listen([this, seat](CTablet::STipEvent e, Event::SCallbackInfo&) {
-            auto& drag = m_drags[seat];
             if (!e.in) {
                 LOG(Log::DEBUG, "Dropping drag on tablet tipUp");
                 dropDrag(seat);

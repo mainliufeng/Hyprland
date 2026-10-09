@@ -63,8 +63,8 @@ class CSeatDesktop {
     bool                                         inputAllowed() const;
     bool                                         viewAvailable() const;
     bool                                         paused() const;
-    bool                                         continuesOnHumanLock() const;
-    void                                         setHumanLockPolicy(bool allow);
+    bool                                         scopeExemptionAllowed() const;
+    void                                         setScopeExemptionAllowed(bool allow);
     void                                         setCaptureGrant(const std::string& grant);
     bool                                         captureGranted(const std::string& grant) const;
     uint64_t                                     controlGeneration() const;
@@ -80,12 +80,14 @@ class CSeatDesktop {
     Layout::Supplementary::CDragStateController* dragController() const;
     void                                         setCursorShape(const std::string& name);
 
+    Keybinds::CKeybindManager*                   keybinds() const;
     UP<Config::Actions::CActionState>&           actionState();
     void                                         attachKeyboard(SP<IKeyboard> keyboard);
     void                                         attachPointer(SP<IPointer> pointer);
     bool                                         canFocusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr, bool allowFullscreenBlocked = false) const;
     void                                         focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr);
     void                                         refocus(uint32_t timeMs = 0, bool keyboard = false);
+    std::string                                  reserveWorkspace(const std::string& name);
     std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false);
     std::vector<uint32_t>                        pressedKeys() const;
     const std::vector<SP<IKeyboard>>&            keyboards() const;
@@ -114,17 +116,18 @@ class CSeatDesktop {
     PHLMONITORREF                                        m_monitor;
     PHLMONITORREF                                        m_homeOutput;
     PHLWORKSPACE                                         m_workspace;
+    std::vector<PHLWORKSPACE>                            m_reservedWorkspaces;
     PHLWINDOWREF                                         m_window;
     bool                                                 m_nativeControl = false;
     std::vector<uint32_t>                                m_nativeKeys;
-    bool                                                 m_active              = true;
-    bool                                                 m_composedKeyboard    = false;
-    bool                                                 m_paused              = false;
-    bool                                                 m_managedControl      = false;
-    bool                                                 m_continueOnHumanLock = false;
-    uint64_t                                             m_controlGeneration   = 1;
-    uint64_t                                             m_viewEpoch           = 1;
-    uint64_t                                             m_focusEpoch          = 1;
+    bool                                                 m_active                = true;
+    bool                                                 m_composedKeyboard      = false;
+    bool                                                 m_paused                = false;
+    bool                                                 m_managedControl        = false;
+    bool                                                 m_scopeExemptionAllowed = false;
+    uint64_t                                             m_controlGeneration     = 1;
+    uint64_t                                             m_viewEpoch             = 1;
+    uint64_t                                             m_focusEpoch            = 1;
     std::unordered_map<IHID*, uint64_t>                  m_deviceGenerations;
     std::unordered_map<wl_client*, UP<SSeatInputClient>> m_inputClients;
     Hyprutils::OS::CFileDescriptor                       m_socketFd;
@@ -146,13 +149,13 @@ class IHID;
 
 class CSeatDesktopRegistry {
   public:
-    uint64_t                             primaryGeneration() const;
-    bool                                 primaryPaused() const;
-    void                                 setPrimaryPaused(bool paused, pid_t owner = 0);
-    bool                                 primaryInput(IHID* device);
-    uint64_t                             primaryClientGeneration(wl_client* client) const;
-    void                                 setPrimaryCaptureGrant(const std::string& grant);
-    bool                                 primaryCaptureGranted(const std::string& grant) const;
+    uint64_t primaryGeneration() const;
+    bool     primaryPaused() const;
+    void     setPrimaryPaused(bool paused, pid_t owner = 0);
+    bool     primaryInput(IHID* device);
+    uint64_t primaryClientGeneration(wl_client* client) const;
+    void     setPrimaryCaptureGrant(const std::string& grant);
+    bool     primaryCaptureGranted(const std::string& grant) const;
     CSeatDesktopRegistry();
     ~CSeatDesktopRegistry();
     std::string                          create(const std::string& name, PHLMONITOR monitor);
@@ -182,8 +185,8 @@ class CSeatDesktopRegistry {
     CHyprSignalListener                                             m_privateOutputAdded;
     SP<CEventLoopTimer>                                             m_frameTimer;
     uint64_t                                                        m_primaryGeneration = 1;
-    bool                                                            m_primaryPaused = true;
-    pid_t                                                           m_primaryOwner = 0;
+    bool                                                            m_primaryPaused     = true;
+    pid_t                                                           m_primaryOwner      = 0;
     std::string                                                     m_primaryCaptureGrant;
     uint64_t                                                        m_nextWindowIdentity = 0;
     std::unordered_map<void*, std::pair<PHLWINDOWREF, std::string>> m_windowIdentities;

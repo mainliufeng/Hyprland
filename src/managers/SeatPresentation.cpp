@@ -1,4 +1,6 @@
 #include "SeatPresentation.hpp"
+#include "SeatConfiguration.hpp"
+#include "../keybinds/Manager.hpp"
 #include "SeatDesktop.hpp"
 #include "SeatManager.hpp"
 #include "SessionLockManager.hpp"
@@ -48,6 +50,9 @@ bool CSeatPresentation::active() const {
 bool CSeatPresentation::activeFor(PHLMONITOR monitor) const {
     return active() && output() == monitor;
 }
+const std::string& CSeatPresentation::owner() const {
+    return m_owner;
+}
 bool CSeatPresentation::controlling() const {
     return active() && m_control;
 }
@@ -64,10 +69,7 @@ std::string CSeatPresentation::show(const std::string& name, const std::string& 
         return "another viewer owns native presentation";
     PHLWORKSPACE view;
     if (requested != "current") {
-        view                 = State::workspaceState()->query().input(requested).run();
-        const auto ownPrefix = "name:cornice-agent-" + name + "-ws-";
-        if (!view && requested.starts_with(ownPrefix))
-            view = State::workspaceState()->createNamed(requested.substr(5), s->monitor());
+        view = State::workspaceState()->query().input(requested).run();
         if (!view || !view->m_monitor)
             return "workspace unavailable";
     }
@@ -206,9 +208,7 @@ bool CSeatPresentation::overlayFocus(uint32_t time) {
     std::vector<PHLLSREF> layers;
     for (const auto& plane : output()->m_layerSurfaceLayers)
         for (const auto& ref : plane)
-            if (const auto layer = ref.lock(); layer &&
-                (layer->m_namespace == "cornice-bar" || layer->m_namespace == "cornice-desktop-menu" || layer->m_namespace == "cornice-agent-prompt" ||
-                 layer->m_namespace == "hyprvoice"))
+            if (const auto layer = ref.lock(); layer && SeatConfig::manager()->overlay(layer, m_identity))
                 layers.emplace_back(ref);
     Vector2D   local;
     PHLLS      found;
@@ -294,8 +294,8 @@ bool CSeatPresentation::keyboardOverlay() const {
         return false;
     for (const auto& plane : output()->m_layerSurfaceLayers)
         for (const auto& ref : plane)
-            if (const auto layer = ref.lock();
-                layer && layer->mapped() && !layer->seatDesktop() && layer->m_namespace == "cornice-agent-prompt" && layer->resource() == g_pSeatManager->m_state.keyboardFocus)
+            if (const auto layer = ref.lock(); layer && layer->mapped() && !layer->seatDesktop() && SeatConfig::manager()->overlay(layer, m_identity, true) &&
+                layer->resource() == g_pSeatManager->m_state.keyboardFocus)
                 return true;
     return false;
 }
@@ -323,16 +323,10 @@ bool CSeatPresentation::key(const IKeyboard::SKeyEvent& event, SP<IKeyboard> key
             g_pSeatManager->sendKeyboardKey(event.timeMs, event.keycode, event.state);
         return true;
     }
-    const auto logo = xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE);
-    if (!controlling() && logo && event.keycode == 30) {
-        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
-            IPC::Socket2::sock()->postEvent({"seatshortcut", ",prompt"});
-        return true;
-    }
-    if (!controlling() && logo && event.keycode >= 2 && event.keycode <= 11) {
-        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
-            show(m_name, m_identity, output(), "name:cornice-agent-" + m_name + "-ws-" + std::to_string(event.keycode == 11 ? 10 : event.keycode - 1), m_owner);
-        return true;
+    if (!controlling()) {
+        auto routed       = event;
+        routed.updateMods = false;
+        Keybinds::mgr()->onKeyEvent(routed, keyboard);
     }
     const auto ctrl = xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
     const auto alt  = xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE);
@@ -392,12 +386,10 @@ bool CSeatPresentation::draw(Render::CRenderContext& ctx, PHLMONITOR target, con
         g_pHyprRenderer->addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{Render::SRenderModifData{}}));
         ctx.m_sceneSeat = nullptr;
     }
-    // Human control chrome remains local; application pixels never pass through Cornice.
+    // Registered local surfaces remain on the target output.
     for (const auto& plane : target->m_layerSurfaceLayers)
         for (const auto& ref : plane)
-            if (const auto layer = ref.lock(); layer &&
-                (layer->m_namespace == "cornice-bar" || layer->m_namespace == "cornice-desktop-menu" || layer->m_namespace == "cornice-agent-prompt" ||
-                 layer->m_namespace == "hyprvoice"))
+            if (const auto layer = ref.lock(); layer && SeatConfig::manager()->overlay(layer, m_identity))
                 g_pHyprRenderer->renderLayer(ctx, layer, target, now);
     for (const auto& popup : g_pInputManager->m_relay.popups())
         if (popup->shouldBeRendered())

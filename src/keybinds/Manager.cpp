@@ -1,4 +1,6 @@
 #include "Manager.hpp"
+#include "../managers/SeatConfiguration.hpp"
+#include "../managers/SeatPresentation.hpp"
 #include "../managers/SeatDesktop.hpp"
 #include "../managers/SeatActionContext.hpp"
 #include "../layout/supplementary/DragController.hpp"
@@ -487,7 +489,12 @@ SBindResult CKeybindManager::processEvent(const SBindEventContext& context, cons
         }
     }
 
+    const bool scopedOverride = std::ranges::any_of(registry().binds(), [&](const auto& bind) {
+        return !bind->metadata().controller.empty() && bind->metadata().overrideInherited && canInvokeNow(bind) && bind->matches(context) == BIND_MATCH_FULL;
+    });
     for (const auto& bind : registry().binds()) {
+        if (scopedOverride && bind->metadata().controller.empty() && bind->matches(context) == BIND_MATCH_FULL)
+            continue;
         if (!canInvokeNow(bind))
             continue;
         if (!context.pressed && pressedInput && pressedInput->capturedAtPress && !bind->hasFlag(BIND_FLAG_ALLOW_INPUT_CAPTURE))
@@ -921,6 +928,14 @@ bool CKeybindManager::handleInternalKeybinds(xkb_keysym_t keysym) {
 }
 
 bool CKeybindManager::canInvokeNow(const PBind& bind) const {
+    const auto& metadata = bind->metadata();
+    const bool  viewing  = !m_seat && g_pSeatPresentation && g_pSeatPresentation->active() && !g_pSeatPresentation->controlling();
+    if (!metadata.controller.empty()) {
+        const auto target = viewing ? g_pSeatPresentation->seat() : m_seat;
+        if (!target || target->socketName() != metadata.seatIdentity || metadata.viewOnly != viewing || !SeatConfig::manager()->live(metadata.controller))
+            return false;
+    } else if (viewing)
+        return false;
     if (m_seat && !m_seat->inputAllowed())
         return false;
     static auto PDISABLEINHIBIT = CConfigValue<Config::INTEGER>("binds:disable_keybind_grabbing");
@@ -929,7 +944,7 @@ bool CKeybindManager::canInvokeNow(const PBind& bind) const {
         return false;
     if (PROTO::inputCapture->isCaptured() && !bind->hasFlag(BIND_FLAG_ALLOW_INPUT_CAPTURE))
         return false;
-    if (g_pSessionLockManager->isSessionLocked() && !bind->hasFlag(BIND_FLAG_LOCKED))
+    if (g_pSessionLockManager->isSessionLocked() && !(m_seat && g_pSessionLockManager->allowsSeatInput(m_seat)) && !bind->hasFlag(BIND_FLAG_LOCKED))
         return false;
     return *PDISABLEINHIBIT || !PROTO::shortcutsInhibit->isInhibited() || bind->hasFlag(BIND_FLAG_DONT_INHIBIT);
 }

@@ -1,5 +1,6 @@
 #include "../managers/SeatPresentation.hpp"
 #include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatConfiguration.hpp"
 #include "Renderer.hpp"
 #include "../protocols/types/Buffer.hpp"
 #include "../managers/SessionLockManager.hpp"
@@ -997,7 +998,7 @@ void IHyprRenderer::renderLayer(CRenderContext& ctx, PHLLS pLayer, PHLMONITOR pM
         return;
     if (ctx.m_sceneSeat && pLayer->seatDesktop() != ctx.m_sceneSeat)
         return;
-    if (ctx.m_sceneSeat && !ctx.m_renderingSnapshot && g_pSeatPresentation->active() && (pLayer->m_namespace == "cornice-bar" || pLayer->m_namespace == "cornice-desktop-menu"))
+    if (ctx.m_sceneSeat && !ctx.m_renderingSnapshot && g_pSeatPresentation->active() && SeatConfig::manager()->overlay(pLayer, ctx.m_sceneSeat->socketName(), false, true))
         return;
 
     if (!pLayer->mapped() || !pLayer->acceptsInput() || !pLayer->alphaNonZero())
@@ -1188,13 +1189,12 @@ void IHyprRenderer::renderAllClientsForWorkspace(CRenderContext& ctx, PHLMONITOR
     if (mode != eSceneMode::MONITOR && !pWorkspace)
         return;
 
-    const bool privateScene = g_pSessionLockManager->humanScope() &&
-        ((ctx.m_renderingSnapshot && g_pSessionLockManager->agentMayContinue(ctx.m_sceneSeat)) || (!ctx.m_renderingSnapshot && g_pSeatDesktopRegistry->isPrivateOutput(pMonitor)));
-    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !privateScene && (g_pSessionLockManager->humanScope() || !*PSESSIONLOCKXRAY)) {
+    const bool privateScene = g_pSessionLockManager->scoped() &&
+        ((ctx.m_renderingSnapshot && g_pSessionLockManager->allowsSeatInput(ctx.m_sceneSeat)) || (!ctx.m_renderingSnapshot && !g_pSessionLockManager->protectsOutput(pMonitor)));
+    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !privateScene && (g_pSessionLockManager->scoped() || !*PSESSIONLOCKXRAY)) {
         // We stop to render workspaces as soon as the lockscreen was sent the "locked" or "finished" (aka denied) event.
         // In addition we make sure to stop rendering workspaces after misc:lockdead_screen_delay has passed.
-        if (g_pSessionLockManager->humanScope() || g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() ||
-            g_pSessionLockManager->clientDenied())
+        if (g_pSessionLockManager->scoped() || g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
             return;
     }
 
@@ -1772,7 +1772,7 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
         return;
     }
 
-    const bool RENDERPRIMER = g_pSessionLockManager->humanScope() || g_pSeatDesktopRegistry->isPrivateOutput(pMonitor) || g_pSessionLockManager->shallConsiderLockMissing() ||
+    const bool RENDERPRIMER = g_pSessionLockManager->scoped() || g_pSeatDesktopRegistry->isPrivateOutput(pMonitor) || g_pSessionLockManager->shallConsiderLockMissing() ||
         g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied();
     if (RENDERPRIMER) {
         renderSessionLockPrimer(ctx, pMonitor);
@@ -1792,7 +1792,7 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
         if (!ctx.m_renderingSnapshot)
             g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
 
-        if (g_pSessionLockManager->humanScope())
+        if (g_pSessionLockManager->scoped())
             return;
 
         // render layers and then their popups for abovelock rule
@@ -1811,7 +1811,7 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
 
 void IHyprRenderer::renderSessionLockPrimer(CRenderContext& ctx, PHLMONITOR pMonitor) {
     static auto PSESSIONLOCKXRAY = CConfigValue<Config::INTEGER>("misc:session_lock_xray");
-    if (*PSESSIONLOCKXRAY && !g_pSessionLockManager->humanScope())
+    if (*PSESSIONLOCKXRAY && !g_pSessionLockManager->scoped())
         return;
 
     CRectPassElement::SRectData data;
@@ -3406,7 +3406,7 @@ class CSeatCaptureBuffer : public IHLBuffer {
 };
 
 std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path, bool raw, bool authorized) {
-    if (g_pSessionLockManager->isSessionLocked() && (!authorized || !g_pSessionLockManager->agentMayContinue(seat)))
+    if (g_pSessionLockManager->isSessionLocked() && (!authorized || !g_pSessionLockManager->allowsSeatInput(seat)))
         return "session is locked";
     if (m_context.active())
         return "renderer is busy";

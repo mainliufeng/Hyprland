@@ -8,6 +8,8 @@
 #include "../../layout/LayoutManager.hpp"
 #include "../Renderer.hpp"
 #include "../../managers/SeatPresentation.hpp"
+#include "../../managers/SeatConfiguration.hpp"
+#include "../../managers/SeatDesktop.hpp"
 #include "../../desktop/view/LayerSurface.hpp"
 
 #include <hyprutils/math/Box.hpp>
@@ -189,7 +191,8 @@ bool CSurfacePassElement::ownsFrameFeedback(Render::CRenderContext& ctx) const {
     // feedback or frame callbacks belonging to the physical presentation.
     if (m_data.pWindow && m_data.pWindow->m_workspace == g_pSeatPresentation->workspace())
         return false;
-    return !m_data.pLS || m_data.pLS->seatDesktop() != g_pSeatPresentation->seat() || m_data.pLS->m_namespace == "cornice-bar" || m_data.pLS->m_namespace == "cornice-desktop-menu";
+    return !m_data.pLS || m_data.pLS->seatDesktop() != g_pSeatPresentation->seat() ||
+        SeatConfig::manager()->overlay(m_data.pLS, g_pSeatPresentation->seat()->socketName(), false, true);
 }
 
 void CSurfacePassElement::discard(Render::CRenderContext& ctx) {

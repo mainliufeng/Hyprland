@@ -69,13 +69,13 @@ CSessionLockManager::CSessionLockManager() {
 void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     static auto PALLOWRELOCK = CConfigValue<Config::INTEGER>("misc:allow_session_lock_restore");
 
-    const bool  upgrading = PROTO::sessionLock->isLocked() && m_humanScope && !pLock->humanScope();
-    if (PROTO::sessionLock->isLocked() && ((!m_humanScope && pLock->humanScope()) || (m_sessionLock && !upgrading))) {
+    const bool  upgrading = PROTO::sessionLock->isLocked() && m_scoped && !pLock->scoped();
+    if (PROTO::sessionLock->isLocked() && ((!m_scoped && pLock->scoped()) || (m_sessionLock && !upgrading))) {
         pLock->sendDenied();
         return;
     }
-    const bool recoveringFull  = PROTO::sessionLock->isLocked() && !m_humanScope && !pLock->humanScope() && !m_sessionLock;
-    const bool recoveringHuman = PROTO::sessionLock->isLocked() && m_humanScope && pLock->humanScope() && !m_sessionLock;
+    const bool recoveringFull  = PROTO::sessionLock->isLocked() && !m_scoped && !pLock->scoped() && !m_sessionLock;
+    const bool recoveringHuman = PROTO::sessionLock->isLocked() && m_scoped && pLock->scoped() && !m_sessionLock;
     if (PROTO::sessionLock->isLocked() && !upgrading && !recoveringHuman && !recoveringFull && !*PALLOWRELOCK && g_pCompositor->m_startLockedCommand.empty()) {
         LOG(Log::DEBUG, "Cannot re-lock, misc:allow_session_lock_restore is disabled");
         pLock->sendDenied();
@@ -89,7 +89,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
 
     if (upgrading && m_sessionLock && m_sessionLock->lock)
         m_sessionLock->lock->sendDenied();
-    m_humanScope = pLock->humanScope();
+    m_scoped = pLock->scoped();
     advanceLockEpoch();
     m_renderedLocks.clear();
     m_presentedLocks.clear();
@@ -110,7 +110,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
 
     m_sessionLock->listeners.unlock = pLock->m_events.unlockAndDestroy.listen([this] {
         advanceLockEpoch();
-        m_humanScope = false;
+        m_scoped = false;
         m_events.unlock.emit();
 
         m_sessionLock.reset();
@@ -121,6 +121,10 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     });
 
     m_sessionLock->listeners.destroy = pLock->m_events.destroyed.listen([this] {
+        if (m_scoped) {
+            abandonToFullLock();
+            return;
+        }
         m_sessionLock.reset();
         Desktop::focusState()->rawSurfaceFocus(nullptr);
 
@@ -128,8 +132,8 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
             g_pHyprRenderer->damageMonitor(m);
     });
 
-    // End human grabs and held pointer/touch actions before routing to the
-    // lock owner. Agent managers are independent and handled by lock listeners.
+    // End physical grabs and held pointer/touch actions before routing to the
+    // lock owner. Independent seat managers are handled by lock listeners.
     g_pSeatManager->setGrab(nullptr);
     g_layoutManager->dragController()->dragEnd();
     PROTO::data->abortDndIfPresent(g_pSeatManager.get());
@@ -268,7 +272,7 @@ bool CSessionLockManager::clientDenied() {
 
 void CSessionLockManager::clearSessionLock() {
     advanceLockEpoch();
-    m_humanScope = false;
+    m_scoped = false;
     m_events.unlock.emit();
     m_sessionLock = {};
 }
@@ -286,15 +290,15 @@ void CSessionLockManager::forceUnlock() {
 
 void CSessionLockManager::abandonToFullLock() {
     m_sessionLock.reset();
-    m_humanScope = false;
+    m_scoped = false;
     advanceLockEpoch();
     m_lockId = m_lockEpoch;
     m_renderedLocks.clear();
     m_presentedLocks.clear();
     PROTO::sessionLock->abandonForFullLock();
     m_events.lock.emit();
-    // End human grabs and held pointer/touch actions before routing to the
-    // lock owner. Agent managers are independent and handled by lock listeners.
+    // End physical grabs and held pointer/touch actions before routing to the
+    // lock owner. Independent seat managers are handled by lock listeners.
     g_pSeatManager->setGrab(nullptr);
     g_layoutManager->dragController()->dragEnd();
     PROTO::data->abortDndIfPresent(g_pSeatManager.get());
@@ -315,7 +319,7 @@ void CSessionLockManager::abandonToFullLock() {
 }
 
 void CSessionLockManager::forceLock() {
-    m_humanScope = false;
+    m_scoped = false;
     advanceLockEpoch();
     PROTO::sessionLock->forceLock();
     m_events.lock.emit();
@@ -330,17 +334,17 @@ bool CSessionLockManager::shallConsiderLockMissing() {
     return m_sessionLock->lockTimer.getMillis() > *LOCKDEAD_SCREEN_DELAY;
 }
 
-bool CSessionLockManager::humanScope() const {
-    return m_humanScope;
+bool CSessionLockManager::scoped() const {
+    return m_scoped;
 }
 uint64_t CSessionLockManager::lockEpoch() const {
     return m_lockEpoch;
 }
 bool CSessionLockManager::protectsOutput(PHLMONITOR monitor) const {
-    return !m_humanScope || !g_pSeatDesktopRegistry || !g_pSeatDesktopRegistry->isPrivateOutput(monitor);
+    return !m_scoped || !m_sessionLock || !m_sessionLock->lock || !m_sessionLock->lock->excludesOutput(monitor);
 }
-bool CSessionLockManager::agentMayContinue(const CSeatDesktop* seat) const {
-    return m_humanScope && seat && seat->continuesOnHumanLock() && !seat->paused();
+bool CSessionLockManager::allowsSeatInput(const CSeatDesktop* seat) const {
+    return m_scoped && m_sessionLock && m_sessionLock->lock && m_sessionLock->lock->allowsSeatInput(seat);
 }
 
 void CSessionLockManager::watchOutput(PHLMONITOR monitor) {
@@ -399,7 +403,7 @@ std::string CSessionLockManager::protectionStateJSON() const {
     outputs += "]";
     return std::format(
         "{{\"scope\":\"{}\",\"phase\":\"{}\",\"locked\":{},\"secure\":{},\"ownerConnected\":{},\"lockId\":\"{}\",\"epoch\":\"{}\",\"lockEpoch\":\"{}\",\"protectedOutputs\":{}}}",
-        locked ? (m_humanScope ? "human" : "session") : "none",
+        locked ? (m_scoped ? "scoped" : "session") : "none",
         !locked             ? "unlocked" :
             !m_sessionLock  ? "orphaned" :
             outputsSecure() ? "secure" :

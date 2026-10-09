@@ -8,6 +8,7 @@
 #include "../../managers/SeatDesktop.hpp"
 #include "../../protocols/core/Seat.hpp"
 #include "Commands.hpp"
+#include "../../managers/SeatConfiguration.hpp"
 #include "../../desktop/view/window/WindowFullscreenPolicy.hpp"
 #include "../../desktop/view/window/WindowGroupMembership.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
@@ -1975,13 +1976,13 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
         return "seat view is unavailable";
     const auto cursor = seat->pointer()->position();
     return std::format("{{\"name\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\",\"paused\":{},\"available\":{},"
-                       "\"humanLockPolicy\":\"{}\",\"humanLocked\":{},\"lockScope\":\"{}\",\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\","
+                       "\"scopePolicy\":\"{}\",\"locked\":{},\"lockScope\":\"{}\",\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\","
                        "\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
                        "\"windowId\":\"{}\",\"window\":\"{}\",\"windowAddress\":\"0x{:x}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
                        "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
                        escapeJSONStrings(seat->protocol()->seatName()), escapeJSONStrings(seat->socketName()), seat->controlGeneration(), seat->paused(), seat->viewAvailable(),
-                       seat->continuesOnHumanLock() ? "continue" : "pause", g_pSessionLockManager->isSessionLocked(),
-                       g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->humanScope() ? "human" : "session") : "none", g_pSessionLockManager->lockEpoch(),
+                       seat->scopeExemptionAllowed() ? "allow" : "block", g_pSessionLockManager->isSessionLocked(),
+                       g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->scoped() ? "scoped" : "session") : "none", g_pSessionLockManager->lockEpoch(),
                        seat->viewEpoch(), escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()), escapeJSONStrings(seat->workspace()->addressableName()),
                        escapeJSONStrings(view->addressableName()), g_pSeatDesktopRegistry->windowIdentity(seat->window()),
                        seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "", rc<uintptr_t>(seat->window().get()), cursor.x, cursor.y,
@@ -2107,58 +2108,69 @@ static std::string humanInputShortcut(const std::string& token, const std::strin
     return "ok";
 }
 
-
 // The primary desktop exposes the same snapshot/action contract as the other
 // seats, while retaining its native physical devices and shell.
-static std::string primaryDesktopId() { return g_pCompositor->m_instanceSignature + "-primary"; }
+static std::string primaryDesktopId() {
+    return g_pCompositor->m_instanceSignature + "-primary";
+}
 static std::string primaryDesktopState(PHLWORKSPACE view = nullptr) {
     ensurePrimaryInputFocusListener();
-    const auto output = Desktop::focusState()->monitor();
+    const auto output  = Desktop::focusState()->monitor();
     const auto current = output ? output->m_activeWorkspace : nullptr;
-    if (!output || !current) return "primary desktop unavailable";
-    if (!view) view = current;
-    const auto window = Desktop::focusState()->window();
-    const auto cursor = Pointer::mgr()->position();
+    if (!output || !current)
+        return "primary desktop unavailable";
+    if (!view)
+        view = current;
+    const auto window    = Desktop::focusState()->window();
+    const auto cursor    = Pointer::mgr()->position();
     const bool available = output->m_enabled && output->m_dpmsStatus && !g_pSeatPresentation->active();
     return std::format("{{\"name\":\"main\",\"primary\":true,\"seatName\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\","
-        "\"paused\":{},\"available\":{},\"humanLockPolicy\":\"pause\",\"humanLocked\":{},\"lockScope\":\"{}\","
-        "\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\",\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
-        "\"windowId\":\"{}\",\"window\":\"{}\",\"windowAddress\":\"0x{:x}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
-        "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
-        HL_SEAT_NAME, escapeJSONStrings(primaryDesktopId()), g_pSeatDesktopRegistry->primaryGeneration(), g_pSeatDesktopRegistry->primaryPaused(), available,
-        g_pSessionLockManager->isSessionLocked(), g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->humanScope() ? "human" : "session") : "none",
-        g_pSessionLockManager->lockEpoch(), primaryInputFocusEpoch, escapeJSONStrings(output->m_name), escapeJSONStrings(g_pCompositor->m_wlDisplaySocket),
-        escapeJSONStrings(current->addressableName()), escapeJSONStrings(view->addressableName()), g_pSeatDesktopRegistry->windowIdentity(window),
-        window ? escapeJSONStrings(window->metadata().title()) : "", rc<uintptr_t>(window.get()), cursor.x, cursor.y, view == current,
-        output->m_position.x, output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x, output->m_transformedSize.y,
-        output->m_scale, static_cast<int>(output->m_transform));
+                       "\"paused\":{},\"available\":{},\"scopePolicy\":\"block\",\"locked\":{},\"lockScope\":\"{}\","
+                       "\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\",\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
+                       "\"windowId\":\"{}\",\"window\":\"{}\",\"windowAddress\":\"0x{:x}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
+                       "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
+                       HL_SEAT_NAME, escapeJSONStrings(primaryDesktopId()), g_pSeatDesktopRegistry->primaryGeneration(), g_pSeatDesktopRegistry->primaryPaused(), available,
+                       g_pSessionLockManager->isSessionLocked(), g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->scoped() ? "scoped" : "session") : "none",
+                       g_pSessionLockManager->lockEpoch(), primaryInputFocusEpoch, escapeJSONStrings(output->m_name), escapeJSONStrings(g_pCompositor->m_wlDisplaySocket),
+                       escapeJSONStrings(current->addressableName()), escapeJSONStrings(view->addressableName()), g_pSeatDesktopRegistry->windowIdentity(window),
+                       window ? escapeJSONStrings(window->metadata().title()) : "", rc<uintptr_t>(window.get()), cursor.x, cursor.y, view == current, output->m_position.x,
+                       output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x, output->m_transformedSize.y, output->m_scale,
+                       static_cast<int>(output->m_transform));
 }
 static std::string primaryDesktopRequest(eHyprCtlOutputFormat format, const CVarList& args) {
-    if (args.size() == 3 && args[1] == "state") return primaryDesktopState();
-    const auto output = Desktop::focusState()->monitor();
+    if (args.size() == 3 && args[1] == "state")
+        return primaryDesktopState();
+    const auto output    = Desktop::focusState()->monitor();
     const auto workspace = output ? output->m_activeWorkspace : nullptr;
-    if (!output || !workspace) return "primary desktop unavailable";
+    if (!output || !workspace)
+        return "primary desktop unavailable";
     if (args.size() == 3 && args[1] == "windows") {
         std::string result = "[";
         for (const auto& window : Desktop::windowState()->windows()) {
-            if (window->m_workspace != workspace || !window->mapped() || window->isHidden()) continue;
-            if (result.size() > 1) result += ",";
+            if (window->m_workspace != workspace || !window->mapped() || window->isHidden())
+                continue;
+            if (result.size() > 1)
+                result += ",";
             result += std::format("{{\"id\":\"{}\",\"title\":\"{}\",\"address\":\"0x{:x}\"}}", g_pSeatDesktopRegistry->windowIdentity(window),
-                escapeJSONStrings(window->metadata().title()), rc<uintptr_t>(window.get()));
+                                  escapeJSONStrings(window->metadata().title()), rc<uintptr_t>(window.get()));
         }
         return result + "]";
     }
     if (args.size() >= 5 && (args[3] != primaryDesktopId() || args[4] != std::to_string(g_pSeatDesktopRegistry->primaryGeneration())) &&
-        (args[1] == "control" || args[1] == "act" || args[1] == "export-grant")) return "stale primary desktop identity or generation";
+        (args[1] == "control" || args[1] == "act" || args[1] == "export-grant"))
+        return "stale primary desktop identity or generation";
     if (args[1] == "control" && args.size() >= 6) {
-        if (args[5] == "pause" && args.size() == 6) g_pSeatDesktopRegistry->setPrimaryPaused(true);
+        if (args[5] == "pause" && args.size() == 6)
+            g_pSeatDesktopRegistry->setPrimaryPaused(true);
         else if (args[5] == "resume-composed" && args.size() == 7) {
-            pid_t owner = 0;
+            pid_t      owner  = 0;
             const auto parsed = std::from_chars(args[6].data(), args[6].data() + args[6].size(), owner);
-            if (parsed.ec != std::errc{} || parsed.ptr != args[6].data() + args[6].size() || owner <= 0 ||
-                g_pSessionLockManager->isSessionLocked() || g_pSeatPresentation->active() || !output->m_dpmsStatus) return "primary control unavailable";
+            if (parsed.ec != std::errc{} || parsed.ptr != args[6].data() + args[6].size() || owner <= 0 || g_pSessionLockManager->isSessionLocked() ||
+                g_pSeatPresentation->active() || !output->m_dpmsStatus)
+                return "primary control unavailable";
             g_pSeatDesktopRegistry->setPrimaryPaused(false, owner);
-        } else return "invalid primary control request";
+        } else
+            return "invalid primary control request";
         return primaryDesktopState();
     }
     if (args[1] == "export-grant" && args.size() == 6) {
@@ -2168,22 +2180,30 @@ static std::string primaryDesktopRequest(eHyprCtlOutputFormat format, const CVar
         return primaryDesktopState();
     }
     if ((args[1] == "snapshot" && args.size() == 7) || (args[1] == "agent-snapshot" && args.size() == 9)) {
-        if (args[3] != primaryDesktopId()) return "stale primary desktop identity";
+        if (args[3] != primaryDesktopId())
+            return "stale primary desktop identity";
         const bool authorized = args[1] == "agent-snapshot";
-        if (authorized && (args[7] != std::to_string(g_pSeatDesktopRegistry->primaryGeneration()) ||
-            !g_pSeatDesktopRegistry->primaryCaptureGranted(args[8]) || args[4] != "current")) return "invalid primary export authorization";
+        if (authorized &&
+            (args[7] != std::to_string(g_pSeatDesktopRegistry->primaryGeneration()) || !g_pSeatDesktopRegistry->primaryCaptureGranted(args[8]) || args[4] != "current"))
+            return "invalid primary export authorization";
         const auto view = args[4] == "current" ? workspace : State::workspaceState()->query().input(args[4]).run();
-        if (!view || (args[5] != "argb" && args[5] != "png")) return "invalid primary snapshot";
+        if (!view || (args[5] != "argb" && args[5] != "png"))
+            return "invalid primary snapshot";
         const auto captured = g_pHyprRenderer->captureSeatWorkspace(view, nullptr, args[6], args[5] == "argb", authorized);
-        if (captured != "ok") return captured;
+        if (captured != "ok")
+            return captured;
         static uint64_t frame = 0;
-        auto state = primaryDesktopState(view); state.pop_back();
-        return state + std::format(",\"frameId\":\"main-{}\",\"timestampNs\":\"{}\",\"format\":\"{}\"}}", ++frame,
-            std::chrono::duration_cast<std::chrono::nanoseconds>(Time::steadyNow().time_since_epoch()).count(), args[5]);
+        auto            state = primaryDesktopState(view);
+        state.pop_back();
+        return state +
+            std::format(",\"frameId\":\"main-{}\",\"timestampNs\":\"{}\",\"format\":\"{}\"}}", ++frame,
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(Time::steadyNow().time_since_epoch()).count(), args[5]);
     }
     if (args[1] == "act" && args.size() == 7) {
-        if (g_pSeatDesktopRegistry->primaryPaused() || g_pSessionLockManager->isSessionLocked() || g_pSeatPresentation->active()) return "primary control paused";
-        if (args[5] == "workspace") return dispatchRequest(format, "dispatch hl.dsp.focus({workspace=" + ("\"" + escapeJSONStrings(args[6]) + "\"") + "})");
+        if (g_pSeatDesktopRegistry->primaryPaused() || g_pSessionLockManager->isSessionLocked() || g_pSeatPresentation->active())
+            return "primary control paused";
+        if (args[5] == "workspace")
+            return dispatchRequest(format, "dispatch hl.dsp.focus({workspace=" + ("\"" + escapeJSONStrings(args[6]) + "\"") + "})");
         if (args[5] == "focus") {
             for (const auto& window : Desktop::windowState()->windows()) {
                 if (window->m_workspace == workspace && g_pSeatDesktopRegistry->windowIdentity(window) == args[6])
@@ -2197,13 +2217,35 @@ static std::string primaryDesktopRequest(eHyprCtlOutputFormat format, const CVar
 
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
-    if (args.size() >= 3 && args[2] == "main") return primaryDesktopRequest(format, args);
+    if (request.starts_with("seat configure "))
+        return SeatConfig::manager()->configure(request.substr(std::string{"seat configure "}.size()));
+    if (args.size() == 3 && args[1] == "configuration-renew")
+        return SeatConfig::manager()->renew(args[2]);
+    if (args.size() == 3 && args[1] == "configuration-remove")
+        return SeatConfig::manager()->remove(args[2]);
+    if (args.size() == 5 && args[1] == "ensure-workspace")
+        return SeatConfig::manager()->ensureWorkspace(args[2], args[3], args[4]);
+    if (args.size() >= 3 && args[2] == "main")
+        return primaryDesktopRequest(format, args);
     if (args.size() == 2 && args[1] == "input-target")
         return humanInputTargetJSON();
     if (args.size() == 5 && args[1] == "input-shortcut")
         return humanInputShortcut(args[2], args[3], args[4]);
+    if ((args.size() == 3 || args.size() == 4) && args[1] == "validate-context")
+        return SeatInput::validateContext(args[2], args.size() == 4 ? args[3] : "");
+    if (args.size() >= 4 && args[1] == "context-dispatch") {
+        if (!SeatInput::validateContext(args[2]).starts_with("{"))
+            return "stale action context";
+        if (SeatInput::contextReadonly(args[2]))
+            return "readonly action context cannot dispatch";
+        const auto prefix = "seat context-dispatch " + args[2] + " ";
+        if (!request.starts_with(prefix))
+            return "invalid action dispatch";
+        SeatInput::CActionScope actionScope(SeatInput::contextSeat(args[2]));
+        return dispatchRequest(format, "dispatch " + request.substr(prefix.size()));
+    }
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","human-input-target-v1","primary-desktop-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1"]})";
     if (args.size() == 7 && args[1] == "present")
         return g_pSeatPresentation->show(args[2], args[3], State::monitorState()->query().name(args[4]).run(), args[5], args[6]);
     if (args.size() == 3 && args[1] == "presentation")
@@ -2250,9 +2292,9 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
         if (!seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4])
             return "stale seat identity or generation";
         if (args[1] == "lock-policy") {
-            if (args[5] != "pause" && args[5] != "continue")
+            if (args[5] != "block" && args[5] != "allow")
                 return "invalid lock policy";
-            seat->setHumanLockPolicy(args[5] == "continue");
+            seat->setScopeExemptionAllowed(args[5] == "allow");
         } else {
             if (args[5].size() < 32 || args[5].size() > 128)
                 return "invalid export grant";
@@ -2336,10 +2378,7 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
             if (format == FORMAT_JSON) {
                 if (!first)
                     result += ",";
-                result += std::format("{{\"name\":\"{}\",\"output\":\"{}\",\"display\":\"{}\",\"cursor\":[{},{}],\"workspace\":\"{}\",\"window\":\"{}\"}}",
-                                      escapeJSONStrings(seat->protocol()->seatName()), monitor ? escapeJSONStrings(monitor->m_name) : "", escapeJSONStrings(seat->socketName()),
-                                      position.x, position.y, seat->workspace() ? escapeJSONStrings(seat->workspace()->addressableName()) : "",
-                                      seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "");
+                result += seatState(seat.get());
             } else
                 result +=
                     std::format("{} output={} display={} cursor={},{}\n", seat->protocol()->seatName(), monitor ? monitor->m_name : "", seat->socketName(), position.x, position.y);

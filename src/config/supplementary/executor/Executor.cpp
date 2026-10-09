@@ -176,7 +176,8 @@ std::vector<std::pair<std::string, std::string>> CExecutor::getHyprlandLaunchEnv
 std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORKSPACE pInitialWorkspace, const std::string& execRuleToken) {
     LOG(Log::DEBUG, "[executor] Executing {}", args);
 
-    const auto seat = SeatInput::current();
+    const auto seat          = SeatInput::current();
+    const auto actionContext = SeatInput::createContext();
     if (seat && !pInitialWorkspace)
         pInitialWorkspace = seat->workspace();
     const auto HLENV = getHyprlandLaunchEnv(pInitialWorkspace);
@@ -199,14 +200,18 @@ std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORK
         }
         setenv("WAYLAND_DISPLAY", seat ? seat->socketName().c_str() : g_pCompositor->m_wlDisplaySocket.c_str(), 1);
         if (seat) {
-            setenv("CORNICE_DESKTOP_NAME", seat->protocol()->seatName().c_str(), 1);
-            setenv("CORNICE_DESKTOP_ID", seat->socketName().c_str(), 1);
-            setenv("CORNICE_DESKTOP_GENERATION", std::to_string(seat->controlGeneration()).c_str(), 1);
-            setenv("CORNICE_DESKTOP_OUTPUT", seat->monitor()->m_name.c_str(), 1);
+            setenv("HYPRLAND_ACTION_ID", actionContext.c_str(), 1);
+            setenv("HYPRLAND_SEAT_NAME", seat->protocol()->seatName().c_str(), 1);
+            setenv("HYPRLAND_SEAT_ID", seat->socketName().c_str(), 1);
+            setenv("HYPRLAND_SEAT_GENERATION", std::to_string(seat->controlGeneration()).c_str(), 1);
+            setenv("HYPRLAND_SEAT_OUTPUT", seat->monitor()->m_name.c_str(), 1);
             unsetenv("DISPLAY");
         }
         if (!execRuleToken.empty())
             setenv(Desktop::Rule::EXEC_RULE_ENV_NAME, execRuleToken.c_str(), true);
+
+        if (!seat && !actionContext.empty())
+            setenv("HYPRLAND_ACTION_ID", actionContext.c_str(), 1);
 
         int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
         if (devnull != -1) {

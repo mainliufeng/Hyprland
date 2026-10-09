@@ -16,27 +16,28 @@ namespace Render {
 // Physical output presentation is independent of either seat's active workspace.
 class CSeatPresentation {
   public:
-    std::string   show(const std::string& name, const std::string& identity, PHLMONITOR output, const std::string& workspace, const std::string& owner);
-    std::string   status(const std::string& owner, bool renew = true);
-    std::string   control(const std::string& owner, bool enabled);
-    std::string   hide(const std::string& owner);
-    void          clear();
-    void          validate();
-    bool          activeFor(PHLMONITOR output) const;
-    bool          active() const;
-    CSeatDesktop* seat() const;
-    PHLWORKSPACE  workspace() const;
-    PHLMONITOR    output() const;
-    bool          controlling() const;
-    bool          overlay() const;
-    bool          draw(Render::CRenderContext& ctx, PHLMONITOR output, const Time::steady_tp& now);
-    bool          motion(const IPointer::SMotionEvent& event, const Vector2D& delta);
-    bool          absolute(const IPointer::SMotionAbsoluteEvent& event);
-    bool          button(const IPointer::SButtonEvent& event);
-    bool          axis(const IPointer::SAxisEvent& event);
-    bool          key(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard);
-    bool          modifiers(SP<IKeyboard> keyboard);
-    bool          frame();
+    std::string        show(const std::string& name, const std::string& identity, PHLMONITOR output, const std::string& workspace, const std::string& owner);
+    std::string        status(const std::string& owner, bool renew = true);
+    std::string        control(const std::string& owner, bool enabled);
+    std::string        hide(const std::string& owner);
+    void               clear();
+    void               validate();
+    bool               activeFor(PHLMONITOR output) const;
+    bool               active() const;
+    CSeatDesktop*      seat() const;
+    PHLWORKSPACE       workspace() const;
+    PHLMONITOR         output() const;
+    const std::string& owner() const;
+    bool               controlling() const;
+    bool               overlay() const;
+    bool               draw(Render::CRenderContext& ctx, PHLMONITOR output, const Time::steady_tp& now);
+    bool               motion(const IPointer::SMotionEvent& event, const Vector2D& delta);
+    bool               absolute(const IPointer::SMotionAbsoluteEvent& event);
+    bool               button(const IPointer::SButtonEvent& event);
+    bool               axis(const IPointer::SAxisEvent& event);
+    bool               key(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard);
+    bool               modifiers(SP<IKeyboard> keyboard);
+    bool               frame();
 
   private:
     void                     pointerMotion(uint32_t time);

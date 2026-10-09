@@ -113,7 +113,7 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_pointer->setCursorBuffer(buffer, image.hotspot / m_monitor->m_scale, m_monitor->m_scale);
     }));
     m_listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] {
-        if (g_pSessionLockManager->agentMayContinue(this))
+        if (g_pSessionLockManager->allowsSeatInput(this))
             return;
         setPaused(true);
         m_dragController->dragEnd();
@@ -217,7 +217,7 @@ bool CSeatDesktop::inputAllowed() const {
 bool CSeatDesktop::viewAvailable() const {
     return m_active && m_homeOutput && m_homeOutput->m_enabled && m_monitor && m_monitor->m_enabled &&
         (g_pSeatDesktopRegistry->isPrivateOutput(m_homeOutput.lock()) || m_monitor->m_dpmsStatus) &&
-        (!g_pSessionLockManager->isSessionLocked() || g_pSessionLockManager->agentMayContinue(this));
+        (!g_pSessionLockManager->isSessionLocked() || g_pSessionLockManager->allowsSeatInput(this));
 }
 
 bool CSeatDesktop::paused() const {
@@ -296,6 +296,7 @@ void CSeatDesktop::setCursorShape(const std::string& name) {
 }
 
 void CSeatDesktop::retire() {
+    m_reservedWorkspaces.clear();
     if (!m_active)
         return;
     m_dragController->dragEnd();
@@ -427,6 +428,10 @@ void CSeatDesktop::attachPointer(SP<IPointer> pointer) {
     refocus();
 }
 
+Keybinds::CKeybindManager* CSeatDesktop::keybinds() const {
+    return m_keybinds.get();
+}
+
 UP<Config::Actions::CActionState>& CSeatDesktop::actionState() {
     return m_actionState;
 }
@@ -464,7 +469,7 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
         else if (event.state == WL_KEYBOARD_KEY_STATE_RELEASED)
             std::erase(m_nativeKeys, event.keycode);
     }
-    SeatInput::CActionScope actionScope(this);
+    SeatInput::CActionScope actionScope(this, native);
     m_manager->setKeyboard(keyboard);
     if (event.keycode == 1 && event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
         PROTO::data->abortDndIfPresent(m_manager.get());
@@ -472,25 +477,6 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
         keyboard->updateXkbStateWithKey(event.keycode + 8, event.state == WL_KEYBOARD_KEY_STATE_PRESSED);
         keyboard->updateModifiersState();
         keyboardModifiers(keyboard);
-    }
-    // Numeric workspace bindings remain scoped to this desktop's namespace.
-    if (event.keycode >= 2 && event.keycode <= 11 && xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) &&
-        !xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) &&
-        !xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE)) {
-        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-            const auto target = "name:cornice-agent-" + protocol()->seatName() + "-ws-" + std::to_string(event.keycode == 11 ? 10 : event.keycode - 1);
-            if (xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE))
-                Config::Actions::moveToWorkspace(target, true);
-            else
-                switchWorkspace(target);
-        }
-        return;
-    }
-    // This shortcut belongs to the secondary seat, never the human bind table.
-    if (event.keycode == 30 && xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE)) {
-        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
-            IPC::Socket2::sock()->postEvent({"seatshortcut", protocol()->seatName() + ",prompt"});
-        return;
     }
     if (!m_keybinds->onKeyEvent(event, keyboard))
         return;
@@ -757,6 +743,20 @@ void CSeatDesktop::listenWorkspaceMonitorChanges() {
     });
 }
 
+std::string CSeatDesktop::reserveWorkspace(const std::string& name) {
+    if (!active() || g_pSessionLockManager->isSessionLocked())
+        return "workspace management unavailable";
+    if (State::workspaceState()->query().input(name).run())
+        return "ok";
+    if (!name.starts_with("name:") || name.size() <= 5 || name.size() > 256 || m_reservedWorkspaces.size() >= 128)
+        return "expected an existing workspace or a bounded name:<name> reservation";
+    auto workspace = State::workspaceState()->createNamed(name.substr(5), monitor());
+    if (!workspace)
+        return "workspace creation failed";
+    m_reservedWorkspaces.push_back(workspace);
+    return "ok";
+}
+
 std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly) {
     if (!inputAllowed() && (!viewOnly || !active() || g_pSessionLockManager->isSessionLocked()))
         return "seat is unavailable or session is locked";
@@ -987,7 +987,7 @@ bool CSeatDesktopRegistry::allowsGlobal(const wl_client* client, const wl_global
         if (protocol && isPrivateOutput(protocol->outputMonitor()))
             return false;
     }
-    if (preferred && PROTO::humanLock && PROTO::humanLock->getGlobal() == global)
+    if (preferred && PROTO::lockScope && PROTO::lockScope->getGlobal() == global)
         return false;
     return !preferred || preferred->protocol()->getGlobal() != global;
 }
@@ -1038,11 +1038,11 @@ bool CSeatDesktop::allowsInputSource(wl_client* client) {
     return m_active && (!m_managedControl || (!m_paused && source->generation == m_controlGeneration));
 }
 
-bool CSeatDesktop::continuesOnHumanLock() const {
-    return m_continueOnHumanLock;
+bool CSeatDesktop::scopeExemptionAllowed() const {
+    return m_scopeExemptionAllowed;
 }
-void CSeatDesktop::setHumanLockPolicy(bool allow) {
-    m_continueOnHumanLock = allow;
+void CSeatDesktop::setScopeExemptionAllowed(bool allow) {
+    m_scopeExemptionAllowed = allow;
 }
 bool CSeatDesktopRegistry::isPrivateOutput(PHLMONITOR monitor) const {
     return monitor && (m_pendingPrivateOutputs.contains(monitor->m_name) || std::ranges::any_of(m_privateOutputs, [&](const auto& ref) { return ref == monitor; }));
@@ -1084,35 +1084,42 @@ std::string CSeatDesktopRegistry::createPrivateOutput(const std::string& name) {
     return "headless output creation failed";
 }
 
-
-uint64_t CSeatDesktopRegistry::primaryGeneration() const { return m_primaryGeneration; }
-bool CSeatDesktopRegistry::primaryPaused() const { return m_primaryPaused; }
+uint64_t CSeatDesktopRegistry::primaryGeneration() const {
+    return m_primaryGeneration;
+}
+bool CSeatDesktopRegistry::primaryPaused() const {
+    return m_primaryPaused;
+}
 void CSeatDesktopRegistry::setPrimaryPaused(bool paused, pid_t owner) {
     if (!paused && (owner <= 0 || g_pSessionLockManager->isSessionLocked() || g_pSeatPresentation->active()))
         return;
     if (m_primaryPaused && paused)
         return;
     m_primaryPaused = paused;
-    m_primaryOwner = paused ? 0 : owner;
+    m_primaryOwner  = paused ? 0 : owner;
     m_primaryCaptureGrant.clear();
     ++m_primaryGeneration;
-    if (paused) g_pInputManager->releasePrimaryAgentInput();
+    if (paused)
+        g_pInputManager->releasePrimaryAgentInput();
     IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("main,{},{}", m_primaryGeneration, paused ? "paused" : "active")});
 }
 uint64_t CSeatDesktopRegistry::primaryClientGeneration(wl_client* client) const {
     pid_t pid = 0;
-    if (client) wl_client_get_credentials(client, &pid, nullptr, nullptr);
+    if (client)
+        wl_client_get_credentials(client, &pid, nullptr, nullptr);
     return !m_primaryPaused && pid == m_primaryOwner ? m_primaryGeneration : 0;
 }
 bool CSeatDesktopRegistry::primaryInput(IHID* device) {
     if (device && device->m_primaryControlGeneration)
-        return !m_primaryPaused && device->m_primaryControlGeneration == m_primaryGeneration &&
-            !g_pSessionLockManager->isSessionLocked() && !g_pSeatPresentation->active();
+        return !m_primaryPaused && device->m_primaryControlGeneration == m_primaryGeneration && !g_pSessionLockManager->isSessionLocked() && !g_pSeatPresentation->active();
     // Any native input takes control before the event can change focus/cursor.
-    if (!m_primaryPaused) setPrimaryPaused(true);
+    if (!m_primaryPaused)
+        setPrimaryPaused(true);
     return true;
 }
-void CSeatDesktopRegistry::setPrimaryCaptureGrant(const std::string& grant) { m_primaryCaptureGrant = grant; }
+void CSeatDesktopRegistry::setPrimaryCaptureGrant(const std::string& grant) {
+    m_primaryCaptureGrant = grant;
+}
 bool CSeatDesktopRegistry::primaryCaptureGranted(const std::string& grant) const {
     return !m_primaryPaused && !grant.empty() && grant == m_primaryCaptureGrant && !g_pSessionLockManager->isSessionLocked();
 }

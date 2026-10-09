@@ -17,8 +17,7 @@ CVirtualPointer::CVirtualPointer(SP<CVirtualPointerV1Resource> resource) : m_poi
         return;
 
     m_listeners.destroy = m_pointer->m_events.destroy.listen([this] {
-        if (m_primaryControlGeneration && g_pSeatDesktopRegistry &&
-            m_primaryControlGeneration == g_pSeatDesktopRegistry->primaryGeneration())
+        if (m_primaryControlGeneration && g_pSeatDesktopRegistry && m_primaryControlGeneration == g_pSeatDesktopRegistry->primaryGeneration())
             g_pSeatDesktopRegistry->setPrimaryPaused(true);
         m_pointer.reset();
         m_events.destroy.emit();

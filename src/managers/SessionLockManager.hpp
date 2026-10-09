@@ -60,10 +60,10 @@ class CSessionLockManager {
     WP<SSessionLockSurface> getSessionLockSurfaceForMonitor(uint64_t);
 
     bool                    isSessionLocked();
-    bool                    humanScope() const;
+    bool                    scoped() const;
     uint64_t                lockEpoch() const;
     bool                    protectsOutput(PHLMONITOR monitor) const;
-    bool                    agentMayContinue(const CSeatDesktop* seat) const;
+    bool                    allowsSeatInput(const CSeatDesktop* seat) const;
     bool                    clientLocked();
     bool                    outputsSecure() const;
     bool                    confirmedOff(PHLMONITOR monitor) const;
@@ -95,9 +95,9 @@ class CSessionLockManager {
 
   private:
     UP<SSessionLock>                       m_sessionLock;
-    bool                                   m_humanScope = false;
-    uint64_t                               m_lockEpoch  = 0;
-    uint64_t                               m_lockId     = 0;
+    bool                                   m_scoped    = false;
+    uint64_t                               m_lockEpoch = 0;
+    uint64_t                               m_lockId    = 0;
     std::unordered_map<uint64_t, uint64_t> m_presentedLocks;
     std::vector<PHLMONITORREF>             m_offOutputs;
     std::vector<CHyprSignalListener>       m_outputListeners;

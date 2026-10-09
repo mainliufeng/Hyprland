@@ -190,7 +190,7 @@ CProtocolManager::CProtocolManager() {
     PROTO::idle                = makeUnique<CIdleNotifyProtocol>(&ext_idle_notifier_v1_interface, 2, "IdleNotify");
     PROTO::lockNotify          = makeUnique<CLockNotifyProtocol>(&hyprland_lock_notifier_v1_interface, 1, "IdleNotify");
     PROTO::sessionLock         = makeUnique<CSessionLockProtocol>(&ext_session_lock_manager_v1_interface, 1, "SessionLock");
-    PROTO::humanLock           = makeUnique<CHumanLockProtocol>(&cornice_human_lock_manager_v1_interface, 1, "CorniceHumanLock");
+    PROTO::lockScope           = makeUnique<CLockScopeProtocol>(&hyprland_lock_scope_manager_v1_interface, 1, "LockScope");
     PROTO::ime                 = makeUnique<CInputMethodV2Protocol>(&zwp_input_method_manager_v2_interface, 1, "IMEv2");
     PROTO::virtualKeyboard     = makeUnique<CVirtualKeyboardProtocol>(&zwp_virtual_keyboard_manager_v1_interface, 1, "VirtualKeyboard");
     PROTO::virtualPointer      = makeUnique<CVirtualPointerProtocol>(&zwlr_virtual_pointer_manager_v1_interface, 2, "VirtualPointer");
@@ -300,7 +300,7 @@ CProtocolManager::~CProtocolManager() {
     PROTO::activation.reset();
     PROTO::idle.reset();
     PROTO::lockNotify.reset();
-    PROTO::humanLock.reset();
+    PROTO::lockScope.reset();
     PROTO::sessionLock.reset();
     PROTO::ime.reset();
     PROTO::virtualKeyboard.reset();

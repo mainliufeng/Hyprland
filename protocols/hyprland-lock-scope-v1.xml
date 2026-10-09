@@ -1,44 +1,52 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<protocol name="cornice_human_lock_v1">
-  <copyright>Copyright 2026 cornice contributors. MIT License.
+<protocol name="hyprland_lock_scope_v1">
+  <copyright>Copyright 2026 contributors. MIT License.
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</copyright>
-  <description summary="lock human input and protected outputs">
-    This private protocol protects the human seat and all outputs except registered
-    agent-private headless outputs. Authorized agent seats may continue using shared
-    application windows. This is not ext-session-lock and does not promise a full
-    session lock. A client disappearing never unlocks the human desktop. Secure is
-    sent only after protected outputs have presented a lock/black frame or are off.
-    Unknown and newly connected outputs are protected by default.
+  <description summary="explicitly scoped compositor lock">
+    Experimental compositor-specific protocol. A new scope protects every seat
+    and output by default. Before activate, a trusted management client may allow
+    preauthorized secondary seats and exclude managed private headless outputs.
+    Seat identity and control generation are checked on activation and on input.
+    Unknown seats and newly connected outputs remain protected. Secure follows
+    presentation of protected lock frames or confirmation that outputs are off.
+    This is not a full ext-session-lock. Scope owner or guard loss escalates to
+    an orphaned full lock and never unlocks. Ordinary ext-session-lock is unchanged.
   </description>
-  <interface name="cornice_human_lock_manager_v1" version="1">
+  <interface name="hyprland_lock_scope_manager_v1" version="1">
     <request name="destroy" type="destructor"/>
-    <request name="lock"><arg name="id" type="new_id" interface="cornice_human_lock_v1"/></request>
+    <request name="create_lock"><arg name="id" type="new_id" interface="hyprland_lock_scope_v1"/></request>
     <request name="get_output_role"><arg name="output" type="object" interface="wl_output"/></request>
     <request name="get_guard">
-      <arg name="id" type="new_id" interface="cornice_session_guard_v1"/>
+      <arg name="id" type="new_id" interface="hyprland_lock_guard_v1"/>
     </request>
-    <event name="output_role"><arg name="output" type="object" interface="wl_output"/><arg name="agent_private" type="uint"/></event>
+    <event name="output_role"><arg name="output" type="object" interface="wl_output"/><arg name="private_headless" type="uint"/></event>
   </interface>
-  <interface name="cornice_session_guard_v1" version="1">
-    <description summary="supervised session lifecycle">
-      Loss of this guard during a human lock atomically escalates to an
-      orphaned full lock and revokes all agent seats. It never unlocks.
+  <interface name="hyprland_lock_guard_v1" version="1">
+    <description summary="supervised lock lifecycle">
+      Loss of this guard during a scoped lock atomically escalates to an
+      orphaned full lock and revokes exemptions. It never unlocks.
     </description>
     <request name="destroy" type="destructor"/>
   </interface>
-  <interface name="cornice_human_lock_v1" version="1">
+  <interface name="hyprland_lock_scope_v1" version="1">
     <enum name="error">
       <entry name="invalid_destroy" value="0"/><entry name="invalid_unlock" value="1"/>
       <entry name="role" value="2"/><entry name="duplicate_output" value="3"/><entry name="already_constructed" value="4"/>
     </enum>
     <request name="destroy" type="destructor"/>
-    <request name="get_lock_surface"><arg name="id" type="new_id" interface="cornice_human_lock_surface_v1"/>
+    <request name="allow_seat">
+      <arg name="name" type="string"/><arg name="identity" type="string"/>
+      <arg name="generation" type="string"/>
+    </request>
+    <request name="exclude_output"><arg name="output" type="object" interface="wl_output"/></request>
+    <request name="activate"/>
+    <request name="get_lock_surface"><arg name="id" type="new_id" interface="hyprland_lock_scope_surface_v1"/>
       <arg name="surface" type="object" interface="wl_surface"/><arg name="output" type="object" interface="wl_output"/>
     </request>
     <request name="unlock_and_destroy" type="destructor"/>
     <event name="secure"/><event name="finished"/>
   </interface>
-  <interface name="cornice_human_lock_surface_v1" version="1">
+  <interface name="hyprland_lock_scope_surface_v1" version="1">
     <enum name="error"><entry name="commit_before_first_ack" value="0"/><entry name="null_buffer" value="1"/><entry name="dimensions_mismatch" value="2"/><entry name="invalid_serial" value="3"/></enum>
     <request name="destroy" type="destructor"/>
     <request name="ack_configure"><arg name="serial" type="uint"/></request>

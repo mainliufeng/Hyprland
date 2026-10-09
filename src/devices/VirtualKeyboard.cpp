@@ -19,8 +19,7 @@ CVirtualKeyboard::CVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keeb_) : m_key
         return;
 
     m_listeners.destroy = keeb_->m_events.destroy.listen([this] {
-        if (m_primaryControlGeneration && g_pSeatDesktopRegistry &&
-            m_primaryControlGeneration == g_pSeatDesktopRegistry->primaryGeneration())
+        if (m_primaryControlGeneration && g_pSeatDesktopRegistry && m_primaryControlGeneration == g_pSeatDesktopRegistry->primaryGeneration())
             g_pSeatDesktopRegistry->setPrimaryPaused(true);
         m_keyboard.reset();
         m_events.destroy.emit();

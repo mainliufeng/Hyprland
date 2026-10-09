@@ -142,7 +142,8 @@ CInputManager::~CInputManager() {
 }
 
 void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
-    if (!g_pSeatDesktopRegistry->primaryInput(e.device.get())) return;
+    if (!g_pSeatDesktopRegistry->primaryInput(e.device.get()))
+        return;
     static auto PNOACCEL = CConfigValue<Config::INTEGER>("input:force_no_accel");
 
     Vector2D    delta   = e.delta;
@@ -191,7 +192,8 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
 }
 
 void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
-    if (!g_pSeatDesktopRegistry->primaryInput(e.device.get())) return;
+    if (!g_pSeatDesktopRegistry->primaryInput(e.device.get()))
+        return;
     if (g_pSeatPresentation && g_pSeatPresentation->absolute(e))
         return;
     if (e.mouse)
@@ -334,7 +336,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         Desktop::focusState()->rawSurfaceFocus(foundLockSurface);
 
         // search for interactable abovelock surfaces for pointer focus, or use session lock surface if not found
-        if (!g_pSessionLockManager->humanScope())
+        if (!g_pSessionLockManager->scoped())
             for (auto& lsl : PMONITOR->m_layerSurfaceLayers | std::views::reverse) {
                 foundSurface = Desktop::viewState()->hitTest().layerSurfaceAt(mouseCoords, &lsl, &surfaceCoords, &pFoundLayerSurface, true);
 
@@ -766,7 +768,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 }
 
 void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) {
-    if (!g_pSeatDesktopRegistry->primaryInput(mouse.get())) return;
+    if (!g_pSeatDesktopRegistry->primaryInput(mouse.get()))
+        return;
     if (g_pSeatPresentation && g_pSeatPresentation->controlling())
         g_pSeatPresentation->seat()->manager()->setMouse(mouse);
     if (g_pSeatPresentation && g_pSeatPresentation->button(e))
@@ -1004,7 +1007,8 @@ void CInputManager::processMouseDownKill(const IPointer::SButtonEvent& e) {
 }
 
 void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
-    if (!g_pSeatDesktopRegistry->primaryInput(pointer.get())) return;
+    if (!g_pSeatDesktopRegistry->primaryInput(pointer.get()))
+        return;
     if (g_pSeatPresentation && g_pSeatPresentation->controlling())
         g_pSeatPresentation->seat()->manager()->setMouse(pointer);
     if (g_pSeatPresentation && g_pSeatPresentation->axis(e))
@@ -1741,7 +1745,8 @@ uint32_t CInputManager::hyprlandModsToXkb(SP<IKeyboard> relative, Input::Modifie
 }
 
 void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> pKeyboard) {
-    if (!g_pSeatDesktopRegistry->primaryInput(pKeyboard.get())) return;
+    if (!g_pSeatDesktopRegistry->primaryInput(pKeyboard.get()))
+        return;
     if (!pKeyboard->m_enabled || !pKeyboard->m_allowed)
         return;
     if (g_pSeatPresentation && g_pSeatPresentation->key(event, pKeyboard))
@@ -1814,7 +1819,8 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
 }
 
 void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
-    if (!g_pSeatDesktopRegistry->primaryInput(pKeyboard.get())) return;
+    if (!g_pSeatDesktopRegistry->primaryInput(pKeyboard.get()))
+        return;
     if (!pKeyboard->m_enabled || !pKeyboard->m_allowed)
         return;
     if (g_pSeatPresentation && g_pSeatPresentation->modifiers(pKeyboard))
@@ -2470,21 +2476,25 @@ void CInputManager::onPinchEnd(IPointer::SPinchEndEvent e) {
     PROTO::pointerGestures->pinchEnd(e.timeMs, e.cancelled);
 }
 
-
 void CInputManager::releasePrimaryAgentInput() {
     const auto now = Time::millis(Time::steadyNow());
     if (g_pSeatManager->m_keyboard && g_pSeatManager->m_keyboard->m_primaryControlGeneration) {
-        for (const auto key : m_pressed) g_pSeatManager->sendKeyboardKey(now, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+        for (const auto key : m_pressed)
+            g_pSeatManager->sendKeyboardKey(now, key, WL_KEYBOARD_KEY_STATE_RELEASED);
         m_pressed.clear();
         g_pSeatManager->sendKeyboardMods(0, 0, 0, 0);
         m_lastMods = Input::ModifierMask{Input::HL_MODIFIER_NONE};
     }
     for (auto it = m_currentlyHeldButtons.begin(); it != m_currentlyHeldButtons.end();) {
         const auto pointer = it->pointer.lock();
-        if (!pointer || !pointer->m_primaryControlGeneration) { ++it; continue; }
+        if (!pointer || !pointer->m_primaryControlGeneration) {
+            ++it;
+            continue;
+        }
         g_pSeatManager->sendPointerButton(now, it->button, WL_POINTER_BUTTON_STATE_RELEASED);
         it = m_currentlyHeldButtons.erase(it);
     }
     g_pSeatManager->sendPointerFrame();
-    if (m_currentlyHeldButtons.empty()) m_focusHeldByButtons = false;
+    if (m_currentlyHeldButtons.empty())
+        m_focusHeldByButtons = false;
 }

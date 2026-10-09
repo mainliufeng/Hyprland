@@ -596,7 +596,7 @@ protocolnew("unstable/xdg-foreign" "xdg-foreign-unstable-v2" false)
 protocolnew("staging/xdg-activation" "xdg-activation-v1" false)
 protocolnew("staging/ext-idle-notify" "ext-idle-notify-v1" false)
 protocolnew("staging/ext-session-lock" "ext-session-lock-v1" false)
-protocolnew("protocols" "cornice-human-lock-v1" true)
+protocolnew("protocols" "hyprland-lock-scope-v1" true)
 protocolnew("stable/tablet" "tablet-v2" false)
 protocolnew("stable/presentation-time" "presentation-time" false)
 protocolnew("stable/xdg-shell" "xdg-shell" false)
@@ -755,3 +755,8 @@ if(BUILD_TESTING)
 else()
   message(STATUS "Testing is disabled")
 endif()
+
+add_custom_target(seat-controller-check
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/hyprtester/multiseat/generic-controller.sh $<TARGET_FILE:Hyprland>
+  DEPENDS Hyprland
+  USES_TERMINAL)

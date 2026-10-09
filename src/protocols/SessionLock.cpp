@@ -141,7 +141,7 @@ CSessionLock::CSessionLock(TLockResource resource_) : m_resource(resource_) {
     std::visit(
         [this](auto& resource) {
             resource->setDestroy([this](auto* r) {
-                if (!m_inert && g_pSessionLockManager->clientLocked()) {
+                if (!m_inert && m_activated && g_pSessionLockManager->clientLocked()) {
                     r->error(0, "Cannot destroy an active lock");
                     return;
                 }
@@ -149,7 +149,7 @@ CSessionLock::CSessionLock(TLockResource resource_) : m_resource(resource_) {
             });
             resource->setOnDestroy([this](auto*) { PROTO::sessionLock->destroyResource(this); });
             resource->setGetLockSurface([this](auto*, uint32_t id, wl_resource* surf, wl_resource* output) {
-                if (!m_inert)
+                if (!m_inert && m_activated)
                     PROTO::sessionLock->onGetLockSurface(this, id, surf, output);
             });
             resource->setUnlockAndDestroy([this](auto* r) {
@@ -157,7 +157,7 @@ CSessionLock::CSessionLock(TLockResource resource_) : m_resource(resource_) {
                     PROTO::sessionLock->destroyResource(this);
                     return;
                 }
-                if (!g_pSessionLockManager->clientLocked()) {
+                if (!m_activated || !g_pSessionLockManager->clientLocked()) {
                     r->error(1, "Lock is not secure");
                     return;
                 }
@@ -170,6 +170,41 @@ CSessionLock::CSessionLock(TLockResource resource_) : m_resource(resource_) {
             });
         },
         m_resource);
+    if (scoped()) {
+        auto resource = std::get<SP<CHyprlandLockScopeV1>>(m_resource);
+        resource->setAllowSeat([this](auto* r, const char* name, const char* identity, const char* generation) {
+            auto seat = g_pSeatDesktopRegistry->forName(name);
+            if (m_activated || m_inert || m_allowedSeats.size() >= 64 || !seat || !seat->scopeExemptionAllowed() || seat->socketName() != identity ||
+                std::to_string(seat->controlGeneration()) != generation) {
+                r->error(2, "Invalid or unauthorized seat exemption");
+                return;
+            }
+            m_allowedSeats.push_back({name, identity, seat->controlGeneration()});
+        });
+        resource->setExcludeOutput([this](auto* r, wl_resource* output) {
+            const auto resource = CWLOutputResource::fromResource(output);
+            const auto monitor  = resource ? resource->m_monitor.lock() : nullptr;
+            if (m_activated || m_inert || !monitor || !g_pSeatDesktopRegistry->isPrivateOutput(monitor)) {
+                r->error(2, "Only managed private headless outputs can be excluded before activation");
+                return;
+            }
+            m_excludedOutputs.push_back(monitor);
+        });
+        resource->setActivate([this](auto* r) {
+            if (m_activated || m_inert) {
+                r->error(4, "Scope is already activated or inert");
+                return;
+            }
+            for (const auto& exemption : m_allowedSeats) {
+                auto seat = g_pSeatDesktopRegistry->forName(exemption.name);
+                if (!seat || seat->socketName() != exemption.identity || seat->controlGeneration() != exemption.generation || !seat->scopeExemptionAllowed()) {
+                    r->error(2, "Seat exemption became stale before activation");
+                    return;
+                }
+            }
+            PROTO::sessionLock->activate(this);
+        });
+    }
 }
 
 CSessionLock::~CSessionLock() {
@@ -234,9 +269,7 @@ void CSessionLockProtocol::onLock(CExtSessionLockManagerV1* pMgr, uint32_t id) {
         return;
     }
 
-    m_events.newLock.emit(RESOURCE);
-
-    m_locked = true;
+    activate(RESOURCE.get());
 }
 
 void CSessionLockProtocol::onGetLockSurface(CSessionLock* lock, uint32_t id, wl_resource* surface, wl_resource* output) {
@@ -261,7 +294,7 @@ void CSessionLockProtocol::onGetLockSurface(CSessionLock* lock, uint32_t id, wl_
             break;
         }
     }
-    if (!sessionLock || (lock->humanScope() && g_pSeatDesktopRegistry->isPrivateOutput(PMONITOR))) {
+    if (!sessionLock || lock->excludesOutput(PMONITOR)) {
         wl_resource_post_error(lock->resource(), 3, "Output is not protected by this lock");
         return;
     }
@@ -281,8 +314,8 @@ void CSessionLockProtocol::onGetLockSurface(CSessionLock* lock, uint32_t id, wl_
     }
     PSURFACE->m_role = makeShared<CLockSurfaceRole>();
     TLockSurfaceResource resource;
-    if (lock->humanScope())
-        resource = makeShared<CCorniceHumanLockSurfaceV1>(wl_resource_get_client(lock->resource()), 1, id);
+    if (lock->scoped())
+        resource = makeShared<CHyprlandLockScopeSurfaceV1>(wl_resource_get_client(lock->resource()), 1, id);
     else
         resource = makeShared<CExtSessionLockSurfaceV1>(wl_resource_get_client(lock->resource()), 1, id);
     const auto RESOURCE = m_lockSurfaces.emplace_back(makeShared<CSessionLockSurface>(resource, PSURFACE, PMONITOR, sessionLock));
@@ -326,30 +359,30 @@ void CSessionLockProtocol::forceLock() {
     PROTO::lockNotify->onLocked();
 }
 
-bool CSessionLock::humanScope() const {
-    return std::holds_alternative<SP<CCorniceHumanLockV1>>(m_resource);
+bool CSessionLock::scoped() const {
+    return std::holds_alternative<SP<CHyprlandLockScopeV1>>(m_resource);
 }
 wl_resource* CSessionLock::resource() const {
     return std::visit([](const auto& r) { return r->resource(); }, m_resource);
 }
 
-CHumanLockProtocol::CHumanLockProtocol(const wl_interface* iface, int ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {}
-void CHumanLockProtocol::bindManager(wl_client* client, void*, uint32_t ver, uint32_t id) {
-    PROTO::sessionLock->bindHumanManager(client, ver, id);
+CLockScopeProtocol::CLockScopeProtocol(const wl_interface* iface, int ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {}
+void CLockScopeProtocol::bindManager(wl_client* client, void*, uint32_t ver, uint32_t id) {
+    PROTO::sessionLock->bindScopeManager(client, ver, id);
 }
-void CSessionLockProtocol::bindHumanManager(wl_client* client, uint32_t ver, uint32_t id) {
+void CSessionLockProtocol::bindScopeManager(wl_client* client, uint32_t ver, uint32_t id) {
     if (g_pSeatDesktopRegistry->forClient(client)) {
-        wl_client_post_implementation_error(client, "Agent connections cannot manage human locks");
+        wl_client_post_implementation_error(client, "Secondary seat connections cannot manage lock scopes");
         return;
     }
-    const auto resource  = m_humanManagers.emplace_back(makeUnique<CCorniceHumanLockManagerV1>(client, ver, id)).get();
-    auto       destroyed = [this](auto* r) { std::erase_if(m_humanManagers, [&](const auto& other) { return other.get() == r; }); };
+    const auto resource  = m_scopeManagers.emplace_back(makeUnique<CHyprlandLockScopeManagerV1>(client, ver, id)).get();
+    auto       destroyed = [this](auto* r) { std::erase_if(m_scopeManagers, [&](const auto& other) { return other.get() == r; }); };
     resource->setDestroy(destroyed);
     resource->setOnDestroy(destroyed);
     resource->setGetGuard([this](auto* manager, uint32_t id) {
-        const auto guard   = m_guards.emplace_back(makeUnique<CCorniceSessionGuardV1>(manager->client(), 1, id)).get();
+        const auto guard   = m_guards.emplace_back(makeUnique<CHyprlandLockGuardV1>(manager->client(), 1, id)).get();
         auto       destroy = [this](auto* resource) {
-            if (g_pSessionLockManager->isSessionLocked() && g_pSessionLockManager->humanScope())
+            if (g_pSessionLockManager->isSessionLocked() && g_pSessionLockManager->scoped())
                 g_pSessionLockManager->abandonToFullLock();
             std::erase_if(m_guards, [&](const auto& item) { return item.get() == resource; });
         };
@@ -364,9 +397,31 @@ void CSessionLockProtocol::bindHumanManager(wl_client* client, uint32_t ver, uin
         }
         r->sendOutputRole(output, g_pSeatDesktopRegistry->isPrivateOutput(res->m_monitor.lock()));
     });
-    resource->setLock([this](auto* r, uint32_t id) {
-        const auto lock = m_locks.emplace_back(makeShared<CSessionLock>(makeShared<CCorniceHumanLockV1>(r->client(), 1, id)));
-        m_events.newLock.emit(lock);
-        m_locked = true;
+    resource->setCreateLock([this](auto* r, uint32_t id) {
+        const auto lock = m_locks.emplace_back(makeShared<CSessionLock>(makeShared<CHyprlandLockScopeV1>(r->client(), 1, id)));
+        if (!lock->good()) {
+            r->noMemory();
+            m_locks.pop_back();
+        }
     });
+}
+
+void CSessionLockProtocol::activate(CSessionLock* lock) {
+    auto found = std::ranges::find_if(m_locks, [lock](const auto& item) { return item.get() == lock; });
+    if (found == m_locks.end())
+        return;
+    lock->m_activated = true;
+    m_events.newLock.emit(*found);
+    if (!lock->inert())
+        m_locked = true;
+}
+
+bool CSessionLock::allowsSeatInput(const CSeatDesktop* seat) const {
+    return !m_inert && m_activated && scoped() && seat && seat->scopeExemptionAllowed() && !seat->paused() && std::ranges::any_of(m_allowedSeats, [seat](const auto& exemption) {
+        return exemption.identity == seat->socketName() && exemption.generation == seat->controlGeneration();
+    });
+}
+
+bool CSessionLock::excludesOutput(PHLMONITOR monitor) const {
+    return scoped() && std::ranges::any_of(m_excludedOutputs, [monitor](const auto& output) { return output.lock() == monitor; });
 }
