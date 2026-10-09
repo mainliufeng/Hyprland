@@ -1,3 +1,5 @@
+#include "../managers/SeatActionContext.hpp"
+#include "../managers/SeatDesktop.hpp"
 #include "PointerController.hpp"
 
 #include "../state/MonitorState.hpp"
@@ -22,6 +24,11 @@ void CPointerController::warpTo(const Vector2D& pos, bool force) const {
         return;
     }
 
+    if (const auto seat = SeatInput::current()) {
+        seat->pointer()->warpTo(pos);
+        seat->refocus(0, true);
+        return;
+    }
     Pointer::mgr()->warpTo(pos);
 
     const auto PMONITORNEW = State::monitorState()->query().vec(pos).run();

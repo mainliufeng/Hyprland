@@ -1,3 +1,4 @@
+#include "../SeatPresentation.hpp"
 #include "InputManager.hpp"
 #include "../SessionLockManager.hpp"
 #include "../../protocols/SessionLock.hpp"
@@ -15,6 +16,8 @@
 #include "UnifiedWorkspaceSwipeGesture.hpp"
 
 void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     m_lastInputTouch = true;
 
     static auto PSWIPETOUCH  = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_touch");
@@ -148,6 +151,8 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
 }
 
 void CInputManager::onTouchUp(ITouch::SUpEvent e, SP<ITouch> device) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     m_lastInputTouch = true;
 
     Event::SCallbackInfo info;
@@ -175,6 +180,8 @@ void CInputManager::onTouchUp(ITouch::SUpEvent e, SP<ITouch> device) {
 }
 
 void CInputManager::onTouchCancel(ITouch::SCancelEvent e, SP<ITouch> device) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     if (!device)
         return;
 
@@ -190,6 +197,8 @@ void CInputManager::onTouchCancel(ITouch::SCancelEvent e, SP<ITouch> device) {
 }
 
 void CInputManager::onTouchMove(ITouch::SMotionEvent e, SP<ITouch> device) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     m_lastInputTouch = true;
 
     m_lastCursorMovement.reset();

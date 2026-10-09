@@ -1,3 +1,6 @@
+#include "../../../managers/SeatActionContext.hpp"
+#include "../../../managers/SeatDesktop.hpp"
+#include "../../../protocols/core/Seat.hpp"
 #include "Executor.hpp"
 
 #include "../../../event/EventBus.hpp"
@@ -173,6 +176,9 @@ std::vector<std::pair<std::string, std::string>> CExecutor::getHyprlandLaunchEnv
 std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORKSPACE pInitialWorkspace, const std::string& execRuleToken) {
     LOG(Log::DEBUG, "[executor] Executing {}", args);
 
+    const auto seat = SeatInput::current();
+    if (seat && !pInitialWorkspace)
+        pInitialWorkspace = seat->workspace();
     const auto HLENV = getHyprlandLaunchEnv(pInitialWorkspace);
 
     pid_t      child = fork();
@@ -191,7 +197,14 @@ std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORK
         for (auto const& e : HLENV) {
             setenv(e.first.c_str(), e.second.c_str(), 1);
         }
-        setenv("WAYLAND_DISPLAY", g_pCompositor->m_wlDisplaySocket.c_str(), 1);
+        setenv("WAYLAND_DISPLAY", seat ? seat->socketName().c_str() : g_pCompositor->m_wlDisplaySocket.c_str(), 1);
+        if (seat) {
+            setenv("CORNICE_DESKTOP_NAME", seat->protocol()->seatName().c_str(), 1);
+            setenv("CORNICE_DESKTOP_ID", seat->socketName().c_str(), 1);
+            setenv("CORNICE_DESKTOP_GENERATION", std::to_string(seat->controlGeneration()).c_str(), 1);
+            setenv("CORNICE_DESKTOP_OUTPUT", seat->monitor()->m_name.c_str(), 1);
+            unsetenv("DISPLAY");
+        }
         if (!execRuleToken.empty())
             setenv(Desktop::Rule::EXEC_RULE_ENV_NAME, execRuleToken.c_str(), true);
 

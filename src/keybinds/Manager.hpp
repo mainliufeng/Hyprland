@@ -11,12 +11,13 @@
 #include <unordered_set>
 
 class IKeyboard;
+class CSeatDesktop;
 
 namespace Keybinds {
 
     class CKeybindManager {
       public:
-        CKeybindManager();
+        explicit CKeybindManager(CSeatDesktop* seat = nullptr);
         ~CKeybindManager();
 
         PBind              addBind(CBind&& bind);
@@ -24,6 +25,7 @@ namespace Keybinds {
         size_t             removeBinds(std::string_view displayKey);
         void               clearBinds();
 
+        void               resetInput();
         bool               onKeyEvent(std::any event, SP<IKeyboard> keyboard);
         bool               onAxisEvent(const IPointer::SAxisEvent& event, SP<IPointer> pointer);
         bool               onMouseEvent(const IPointer::SButtonEvent& event, SP<IPointer> pointer, bool captured = false);
@@ -68,6 +70,7 @@ namespace Keybinds {
         bool                          handleVT(xkb_keysym_t keysym);
         bool                          canInvokeNow(const PBind& bind) const;
 
+        CSeatDesktop*                 m_seat = nullptr;
         CRegistry                     m_registry;
         CInputState                   m_inputState;
         std::unordered_set<WP<CBind>> m_shadowed;

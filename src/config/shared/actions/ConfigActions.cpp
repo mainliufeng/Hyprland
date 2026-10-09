@@ -1,3 +1,5 @@
+#include "../../../managers/SeatActionContext.hpp"
+#include "../../../managers/SeatDesktop.hpp"
 #include "ConfigActions.hpp"
 #include "../parserUtils/ParserUtils.hpp"
 #include "../../ConfigManager.hpp"
@@ -49,6 +51,8 @@ using namespace Config;
 using namespace Config::Actions;
 
 UP<CActionState>& Actions::state() {
+    if (const auto seat = SeatInput::current())
+        return seat->actionState();
     static UP<CActionState> p = makeUnique<CActionState>();
     return p;
 }
@@ -306,7 +310,8 @@ ActionResult Actions::pinWindow(eTogglableAction action, std::optional<PHLWINDOW
     if (!PMONITOR)
         return actionError("Window has no monitor", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_STATE);
 
-    if (!PMONITOR->m_activeWorkspace || !PMONITOR->m_activeWorkspace->space())
+    const auto activeWorkspace = SeatInput::current() ? SeatInput::current()->workspace() : PMONITOR->m_activeWorkspace;
+    if (!activeWorkspace || !activeWorkspace->space())
         return actionError("Monitor has no active workspace", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_STATE);
 
     const auto LAYOUTTARGET = window->layoutTarget();
@@ -320,7 +325,7 @@ ActionResult Actions::pinWindow(eTogglableAction action, std::optional<PHLWINDOW
     window->updateFullscreenInputState();
     *window->presentation().alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN) = window->isBlockedByFullscreen() ? 0.F : 1.F;
 
-    LAYOUTTARGET->assignToSpace(PMONITOR->m_activeWorkspace->space());
+    LAYOUTTARGET->assignToSpace(activeWorkspace->space());
     window->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_PINNED);
 
     const auto PWORKSPACE = window->m_workspace;
@@ -389,6 +394,19 @@ ActionResult Actions::moveToWorkspace(PHLWORKSPACE ws, bool silent, std::optiona
         return {};
 
     const auto POLDWS = window->m_workspace;
+
+    if (const auto seat = SeatInput::current()) {
+        g_pHyprRenderer->damageWindow(window);
+        Desktop::globalWindowController()->moveWindowToWorkspace(window, ws);
+        if (!silent) {
+            seat->switchWorkspace(Workspace::selector(*ws));
+            seat->focusWindow(window);
+        } else {
+            seat->focusWindow(POLDWS->getFocusCandidate());
+            seat->refocus();
+        }
+        return {};
+    }
 
     updateRelativeCursorCoords();
     g_pHyprRenderer->damageWindow(window);
@@ -513,13 +531,14 @@ ActionResult Actions::moveFocus(Math::eDirection dir) {
         default: break;
     }
 
-    const auto PWINDOWCANDIDATE =
-        Desktop::windowState()->query().inDirection({.origin             = box,
-                                                     .workspace          = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace,
-                                                     .direction          = dir,
-                                                     .floatingPreference = PLASTWINDOW->isFloating(),
-                                                     .ignoreWindow       = PLASTWINDOW,
-                                                     .useVectorAngles    = PLASTWINDOW->isFloating()});
+    const auto PWINDOWCANDIDATE = Desktop::windowState()->query().inDirection({.origin             = box,
+                                                                               .workspace          = SeatInput::current() ? SeatInput::current()->workspace() :
+                                                                                   PMONITOR->m_activeSpecialWorkspace     ? PMONITOR->m_activeSpecialWorkspace :
+                                                                                                                            PMONITOR->m_activeWorkspace,
+                                                                               .direction          = dir,
+                                                                               .floatingPreference = PLASTWINDOW->isFloating(),
+                                                                               .ignoreWindow       = PLASTWINDOW,
+                                                                               .useVectorAngles    = PLASTWINDOW->isFloating()});
     if (PWINDOWCANDIDATE)
         switchToWindow(PWINDOWCANDIDATE);
 
@@ -527,6 +546,12 @@ ActionResult Actions::moveFocus(Math::eDirection dir) {
 }
 
 ActionResult Actions::focus(PHLWINDOW window) {
+    if (const auto seat = SeatInput::current(); seat && window && window->m_workspace) {
+        if (window->m_workspace != seat->workspace())
+            seat->switchWorkspace(Workspace::selector(*window->m_workspace));
+        seat->focusWindow(window);
+        return {};
+    }
     if (!window)
         return {};
 
@@ -1014,6 +1039,12 @@ ActionResult Actions::setGroupActive(int index, std::optional<PHLWINDOW> w) {
 }
 
 ActionResult Actions::changeWorkspace(PHLWORKSPACE ws) {
+    if (const auto seat = SeatInput::current(); seat && ws) {
+        const auto result = seat->switchWorkspace(Workspace::selector(*ws));
+        if (result != "ok")
+            return actionError(result);
+        return {};
+    }
     if (!ws)
         return actionError("Invalid workspace", eActionErrorLevel::WARNING, eActionErrorCode::NO_TARGET);
 
@@ -1080,6 +1111,12 @@ ActionResult Actions::changeWorkspace(PHLWORKSPACE ws) {
 }
 
 ActionResult Actions::changeWorkspace(const std::string& ws) {
+    if (const auto seat = SeatInput::current()) {
+        const auto result = seat->switchWorkspace(ws);
+        if (result != "ok")
+            return actionError(result);
+        return {};
+    }
     return Actions::changeWorkspace(resolveWorkspaceForChange(ws));
 }
 
@@ -1671,6 +1708,13 @@ ActionResult Actions::global(const std::string& action) {
 }
 
 ActionResult Actions::mouse(const std::string& action) {
+    if (const auto seat = SeatInput::current()) {
+        if (state()->m_passPressed != 1)
+            seat->dragController()->dragEnd();
+        else if (const auto window = seat->window())
+            seat->dragController()->dragBegin(window->layoutTarget(), action == "movewindow" ? MBIND_MOVE : MBIND_RESIZE, std::nullopt, true);
+        return {};
+    }
     const bool PRESSED = Config::Actions::state()->m_passPressed == 1;
 
     if (!PRESSED) {
@@ -1737,7 +1781,7 @@ ActionResult Actions::cycleNext(const bool next, std::optional<bool> onlyTiled, 
     auto window = xtract(w);
 
     if (!window) {
-        const auto PWS = Desktop::focusState()->monitor()->m_activeWorkspace;
+        const auto PWS = SeatInput::current() ? SeatInput::current()->workspace() : Desktop::focusState()->monitor()->m_activeWorkspace;
         if (PWS && PWS->getWindowCount() > 0) {
             const auto PFIRST = PWS->getFirstWindow();
             switchToWindow(PFIRST);

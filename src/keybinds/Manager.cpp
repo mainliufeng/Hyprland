@@ -1,4 +1,7 @@
 #include "Manager.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatActionContext.hpp"
+#include "../layout/supplementary/DragController.hpp"
 #include "../helpers/MiscFunctions.hpp"
 #include "MatchResolver.hpp"
 
@@ -51,12 +54,13 @@ void CKeybindManager::STimedBatch::clear() {
     requiresHeldInput = false;
 }
 
-CKeybindManager::CKeybindManager() {
+CKeybindManager::CKeybindManager(CSeatDesktop* seat) : m_seat(seat) {
     m_scrollTimer.reset();
 
     m_longPressTimer = makeShared<CEventLoopTimer>(
         std::nullopt,
         [this](SP<CEventLoopTimer>, void*) {
+            SeatInput::CActionScope actionScope(m_seat);
             if (m_longPress.empty())
                 return;
 
@@ -88,6 +92,7 @@ CKeybindManager::CKeybindManager() {
     m_repeatTimer = makeShared<CEventLoopTimer>(
         std::nullopt,
         [this](SP<CEventLoopTimer> self, void*) {
+            SeatInput::CActionScope actionScope(m_seat);
             if (m_repeat.empty() || m_repeatRate == 0)
                 return;
 
@@ -187,7 +192,14 @@ static std::optional<Input::eKeyboardModifiers> modifierFromXkb(xkb_keysym_t sym
     return std::nullopt;
 }
 
+void CKeybindManager::resetInput() {
+    cancelTimedBinds();
+    m_inputState.clear();
+    m_shadowed.clear();
+}
+
 bool CKeybindManager::onKeyEvent(std::any event, SP<IKeyboard> keyboard) {
+    SeatInput::CActionScope actionScope(m_seat);
     if (!g_pCompositor->m_sessionActive) {
         invokeReleaseCallbacks(m_inputState.takeAllReleaseCallbacks());
         m_inputState.clear();
@@ -209,21 +221,23 @@ bool CKeybindManager::onKeyEvent(std::any event, SP<IKeyboard> keyboard) {
     const auto KEYSYM    = xkb_state_key_get_one_sym(keyboard->m_resolveBindsBySym ? keyboard->m_xkbSymState : m_xkbTranslationState, KEYCODE);
     const auto INTERNAL  = xkb_state_key_get_one_sym(keyboard->m_xkbState, KEYCODE);
 
-    if (KEYSYM == XKB_KEY_Escape || INTERNAL == XKB_KEY_Escape)
+    if (!m_seat && (KEYSYM == XKB_KEY_Escape || INTERNAL == XKB_KEY_Escape))
         PROTO::data->abortDndIfPresent();
 
-    if (!PROTO::inputCapture->isCaptured() && handleInternalKeybinds(INTERNAL))
+    if (!m_seat && !PROTO::inputCapture->isCaptured() && handleInternalKeybinds(INTERNAL))
         return false;
 
-    const auto MODIFIERS = g_pInputManager->getModsFromAllKBs();
-    if (PROTO::hotkey && PROTO::hotkey->onKey(KEYSYM, MODIFIERS, KEYCODE, KEY_EVENT.state == WL_KEYBOARD_KEY_STATE_PRESSED, KEY_EVENT.timeMs))
+    const auto MODIFIERS = m_seat && m_seat->manager()->m_keyboard ?
+        g_pInputManager->xkbModsToHyprland(m_seat->manager()->m_keyboard.lock(), m_seat->manager()->m_keyboard->m_modifiersState.depressed) :
+        g_pInputManager->getModsFromAllKBs();
+    if (!m_seat && PROTO::hotkey && PROTO::hotkey->onKey(KEYSYM, MODIFIERS, KEYCODE, KEY_EVENT.state == WL_KEYBOARD_KEY_STATE_PRESSED, KEY_EVENT.timeMs))
         return false;
 
     Config::Actions::state()->m_timeLastMs    = KEY_EVENT.timeMs;
     Config::Actions::state()->m_lastCode      = KEYCODE;
     Config::Actions::state()->m_lastMouseCode = 0;
 
-    const bool DRAG_WAS_ACTIVE = g_layoutManager->endDragTarget();
+    const bool DRAG_WAS_ACTIVE = (m_seat ? m_seat->dragController()->dragEnd() : g_layoutManager->endDragTarget());
     cancelTimedBinds();
 
     const auto KEY_AS_MOD = modifierFromXkb(KEYSYM);
@@ -243,7 +257,7 @@ bool CKeybindManager::onKeyEvent(std::any event, SP<IKeyboard> keyboard) {
                 .actionCode       = KEYCODE,
                 .actionTimeMs     = KEY_EVENT.timeMs,
                 .submapAtPress    = std::string{currentSubmap()},
-                .positionAtPress  = Pointer::mgr()->untransformedPosition(),
+                .positionAtPress  = (m_seat ? m_seat->pointer()->untransformedPosition() : Pointer::mgr()->untransformedPosition()),
                 .device           = keyboard,
             })) {
             const auto* existing = m_inputState.find(KEY, keyboard);
@@ -313,7 +327,8 @@ bool CKeybindManager::onKeyEvent(std::any event, SP<IKeyboard> keyboard) {
 }
 
 bool CKeybindManager::onAxisEvent(const IPointer::SAxisEvent& event, SP<IPointer> pointer) {
-    static auto PDELAY = CConfigValue<Config::INTEGER>("binds:scroll_event_delay");
+    SeatInput::CActionScope actionScope(m_seat);
+    static auto             PDELAY = CConfigValue<Config::INTEGER>("binds:scroll_event_delay");
 
     if (m_scrollTimer.getMillis() < *PDELAY)
         return true;
@@ -333,12 +348,15 @@ bool CKeybindManager::onAxisEvent(const IPointer::SAxisEvent& event, SP<IPointer
     const SResolvedKey KEY{.event = name};
     const auto         RESULT = processEvent(
         {
-            .heldKeys     = m_inputState.heldKeys(),
-            .trigger      = KEY,
-            .modifiersNow = sc<ModifierMask>(g_pInputManager->getModsFromAllKBs()),
-            .pressed      = true,
-            .device       = pointer,
-            .submap       = std::string{currentSubmap()},
+            .heldKeys = m_inputState.heldKeys(),
+            .trigger  = KEY,
+            .modifiersNow =
+                sc<ModifierMask>(m_seat && m_seat->manager()->m_keyboard ?
+                                     g_pInputManager->xkbModsToHyprland(m_seat->manager()->m_keyboard.lock(), m_seat->manager()->m_keyboard->m_modifiersState.depressed) :
+                                     g_pInputManager->getModsFromAllKBs()),
+            .pressed = true,
+            .device  = pointer,
+            .submap  = std::string{currentSubmap()},
         },
         nullptr);
 
@@ -346,14 +364,17 @@ bool CKeybindManager::onAxisEvent(const IPointer::SAxisEvent& event, SP<IPointer
 }
 
 bool CKeybindManager::onMouseEvent(const IPointer::SButtonEvent& event, SP<IPointer> pointer, bool captured) {
-    const auto MODIFIERS = g_pInputManager->getModsFromAllKBs();
-    const auto KEY       = SResolvedKey{.event = "mouse:" + std::to_string(event.button)};
+    SeatInput::CActionScope actionScope(m_seat);
+    const auto              MODIFIERS = m_seat && m_seat->manager()->m_keyboard ?
+        g_pInputManager->xkbModsToHyprland(m_seat->manager()->m_keyboard.lock(), m_seat->manager()->m_keyboard->m_modifiersState.depressed) :
+        g_pInputManager->getModsFromAllKBs();
+    const auto              KEY       = SResolvedKey{.event = "mouse:" + std::to_string(event.button)};
 
     Config::Actions::state()->m_lastMouseCode = event.button;
     Config::Actions::state()->m_lastCode      = 0;
     Config::Actions::state()->m_timeLastMs    = event.timeMs;
 
-    const bool DRAG_WAS_ACTIVE = captured ? false : g_layoutManager->endDragTarget();
+    const bool DRAG_WAS_ACTIVE = captured ? false : (m_seat ? m_seat->dragController()->dragEnd() : g_layoutManager->endDragTarget());
     cancelTimedBinds();
 
     if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -365,7 +386,7 @@ bool CKeybindManager::onMouseEvent(const IPointer::SButtonEvent& event, SP<IPoin
                 .actionMouseCode  = event.button,
                 .actionTimeMs     = event.timeMs,
                 .submapAtPress    = std::string{currentSubmap()},
-                .positionAtPress  = Pointer::mgr()->untransformedPosition(),
+                .positionAtPress  = (m_seat ? m_seat->pointer()->untransformedPosition() : Pointer::mgr()->untransformedPosition()),
                 .device           = pointer,
             })) {
             const auto* existing = m_inputState.find(KEY, pointer);
@@ -466,7 +487,7 @@ SBindResult CKeybindManager::processEvent(const SBindEventContext& context, cons
         }
     }
 
-    for (const auto& bind : m_registry.binds()) {
+    for (const auto& bind : registry().binds()) {
         if (!canInvokeNow(bind))
             continue;
         if (!context.pressed && pressedInput && pressedInput->capturedAtPress && !bind->hasFlag(BIND_FLAG_ALLOW_INPUT_CAPTURE))
@@ -489,10 +510,11 @@ SBindResult CKeybindManager::processEvent(const SBindEventContext& context, cons
             continue;
 
         if (MATCH == BIND_MATCH_FULL && !context.pressed && pressedInput) {
-            const bool THRESHOLD_REACHED = pressedInput->positionAtPress.distanceSq(Pointer::mgr()->untransformedPosition()) > std::pow(*PDRAGTHRESHOLD, 2);
-            if (bind->hasFlag(BIND_FLAG_CLICK) && (g_layoutManager->dragController()->dragThresholdReached() || THRESHOLD_REACHED))
+            const bool THRESHOLD_REACHED = pressedInput->positionAtPress.distanceSq(
+                                               (m_seat ? m_seat->pointer()->untransformedPosition() : Pointer::mgr()->untransformedPosition())) > std::pow(*PDRAGTHRESHOLD, 2);
+            if (bind->hasFlag(BIND_FLAG_CLICK) && ((m_seat ? m_seat->dragController() : g_layoutManager->dragController().get())->dragThresholdReached() || THRESHOLD_REACHED))
                 continue;
-            if (bind->hasFlag(BIND_FLAG_DRAG) && !g_layoutManager->dragController()->dragThresholdReached() && !THRESHOLD_REACHED)
+            if (bind->hasFlag(BIND_FLAG_DRAG) && !(m_seat ? m_seat->dragController() : g_layoutManager->dragController().get())->dragThresholdReached() && !THRESHOLD_REACHED)
                 continue;
         }
 
@@ -572,8 +594,8 @@ SBindResult CKeybindManager::processEvent(const SBindEventContext& context, cons
     if (!repeatHits.empty())
         scheduleRepeat(repeatHits, context, keyboard, pressedInput != nullptr);
 
-    if (!PROTO::inputCapture->isCaptured() && !g_layoutManager->dragController()->target())
-        g_layoutManager->dragController()->resetDragThresholdReached();
+    if (!PROTO::inputCapture->isCaptured() && !(m_seat ? m_seat->dragController() : g_layoutManager->dragController().get())->target())
+        (m_seat ? m_seat->dragController() : g_layoutManager->dragController().get())->resetDragThresholdReached();
     aggregate.passEvent = !claimed;
     if (!claimed && INHIBITED) {
         aggregate.success = false;
@@ -585,12 +607,13 @@ SBindResult CKeybindManager::processEvent(const SBindEventContext& context, cons
 }
 
 SBindResult CKeybindManager::invokeBind(const PBind& bind, bool pressed, SPressedInput* pressedInput) {
-    const auto INPUT_KEY    = pressedInput ? std::optional{pressedInput->key} : std::nullopt;
-    const auto INPUT_DEVICE = pressedInput ? pressedInput->device.lock() : nullptr;
+    SeatInput::CActionScope actionScope(m_seat);
+    const auto              INPUT_KEY    = pressedInput ? std::optional{pressedInput->key} : std::nullopt;
+    const auto              INPUT_DEVICE = pressedInput ? pressedInput->device.lock() : nullptr;
 
-    auto&      actionState      = *Config::Actions::state();
-    const auto PREVIOUS_PRESSED = actionState.m_passPressed;
-    const bool OUTERMOST        = actionState.m_bindInvocationDepth++ == 0;
+    auto&                   actionState      = *Config::Actions::state();
+    const auto              PREVIOUS_PRESSED = actionState.m_passPressed;
+    const bool              OUTERMOST        = actionState.m_bindInvocationDepth++ == 0;
     if (OUTERMOST)
         actionState.m_requestBindRelease = false;
     actionState.m_passPressed = sc<int>(pressed);
@@ -683,7 +706,7 @@ void CKeybindManager::invokeDeferredBinds(const SResolvedKey& key, const SP<IHID
 
 void CKeybindManager::suppressSubChords(const PBind& completed, const SBindEventContext& context) {
     std::vector<PBind> suppressed;
-    for (const auto& bind : m_registry.binds()) {
+    for (const auto& bind : registry().binds()) {
         if (bind == completed || !bind->isSubChordOf(*completed, context))
             continue;
 
@@ -758,9 +781,12 @@ void CKeybindManager::shadowBinds(const std::optional<SResolvedKey>& excluded, c
     if (!g_pInputManager)
         return;
 
-    const auto MODIFIERS = sc<ModifierMask>(g_pInputManager->getModsFromAllKBs());
+    const auto MODIFIERS =
+        sc<ModifierMask>(m_seat && m_seat->manager()->m_keyboard ?
+                             g_pInputManager->xkbModsToHyprland(m_seat->manager()->m_keyboard.lock(), m_seat->manager()->m_keyboard->m_modifiersState.depressed) :
+                             g_pInputManager->getModsFromAllKBs());
 
-    for (const auto& bind : m_registry.binds()) {
+    for (const auto& bind : registry().binds()) {
         if (!bind->enabled() || bind->hasFlag(BIND_FLAG_TRANSPARENT))
             continue;
         if (std::ranges::any_of(m_inputState.pressed(),
@@ -802,11 +828,11 @@ PBind CKeybindManager::findConflictingBind(xkb_keysym_t keysym, ModifierMask mod
 }
 
 CRegistry& CKeybindManager::registry() {
-    return m_registry;
+    return m_seat ? Keybinds::mgr()->registry() : m_registry;
 }
 
 const CRegistry& CKeybindManager::registry() const {
-    return m_registry;
+    return m_seat ? Keybinds::mgr()->registry() : m_registry;
 }
 
 CInputState& CKeybindManager::inputState() {
@@ -895,9 +921,11 @@ bool CKeybindManager::handleInternalKeybinds(xkb_keysym_t keysym) {
 }
 
 bool CKeybindManager::canInvokeNow(const PBind& bind) const {
+    if (m_seat && !m_seat->inputAllowed())
+        return false;
     static auto PDISABLEINHIBIT = CConfigValue<Config::INTEGER>("binds:disable_keybind_grabbing");
 
-    if (!bind->enabled() || !m_registry.contains(bind) || m_shadowed.contains(bind))
+    if (!bind->enabled() || !registry().contains(bind) || m_shadowed.contains(bind))
         return false;
     if (PROTO::inputCapture->isCaptured() && !bind->hasFlag(BIND_FLAG_ALLOW_INPUT_CAPTURE))
         return false;

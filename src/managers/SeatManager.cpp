@@ -252,7 +252,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     if (m_state.keyboardFocus == surf)
         return;
 
-    if (!hasCapability(HID_INPUT_CAPABILITY_KEYBOARD)) {
+    if (!hasCapability(HID_INPUT_CAPABILITY_KEYBOARD) || !m_keyboard) {
         LOG(Log::ERR, "BUG THIS: setKeyboardFocus without a valid keyboard capability");
         return;
     }

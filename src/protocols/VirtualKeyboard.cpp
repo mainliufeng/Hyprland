@@ -1,6 +1,8 @@
 #include "core/Seat.hpp"
 #include "../managers/SeatManager.hpp"
 #include "../managers/SeatDesktop.hpp"
+#include "../managers/input/InputMethodRelay.hpp"
+#include "InputMethodV2.hpp"
 #include "VirtualKeyboard.hpp"
 #include <filesystem>
 #include <sys/mman.h>
@@ -171,8 +173,11 @@ void CVirtualKeyboardProtocol::onCreateKeeb(CZwpVirtualKeyboardManagerV1* pMgr, 
         wl_client_post_implementation_error(pMgr->client(), "invalid virtual keyboard seat");
         return;
     }
-    const auto desktop      = requestedSeat->manager()->m_desktop;
-    const bool inputAllowed = !desktop || desktop->allowsInputSource(pMgr->client());
+    const auto desktop     = requestedSeat->manager()->m_desktop;
+    const auto inputMethod = desktop ? desktop->relay()->m_inputMethod.lock() : nullptr;
+    // A persistent multi-seat IME is not an automation driver. Its new feedback
+    // keyboard must survive driver generation changes, scoped to its own seat.
+    const bool inputAllowed = !desktop || (desktop->inputAllowed() && inputMethod && inputMethod->client() == pMgr->client()) || desktop->allowsInputSource(pMgr->client());
     const auto RESOURCE = m_keyboards.emplace_back(makeShared<CVirtualKeyboardV1Resource>(makeShared<CZwpVirtualKeyboardV1>(pMgr->client(), pMgr->version(), id), requestedSeat));
 
     if UNLIKELY (!RESOURCE->good()) {

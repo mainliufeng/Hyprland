@@ -1,3 +1,7 @@
+#include "SeatPresentation.hpp"
+#include "SeatActionContext.hpp"
+#include "../keybinds/Manager.hpp"
+#include "../config/shared/actions/ConfigActions.hpp"
 #include "../Compositor.hpp"
 #include "../event/EventBus.hpp"
 #include "../protocols/core/Output.hpp"
@@ -74,6 +78,8 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
     m_pointer = makeUnique<Pointer::CPointerManager>(true);
     m_pointer->bindMonitor(monitor);
     m_dragController  = makeUnique<Layout::Supplementary::CDragStateController>(this);
+    m_actionState     = makeUnique<Config::Actions::CActionState>();
+    m_keybinds        = makeUnique<Keybinds::CKeybindManager>(this);
     const auto& image = Pointer::mgr()->currentCursorImage();
     m_pointer->setCursorBuffer(Pointer::Cursor::mgr()->getCursorBuffer(), image.hotspot, image.scale);
     m_pointer->warpTo(monitor->m_position + monitor->m_size / 2.0);
@@ -234,6 +240,16 @@ void CSeatDesktop::setPaused(bool paused, bool composedKeyboard) {
     for (const auto code : m_buttons)
         m_manager->sendPointerButton(time, code, WL_POINTER_BUTTON_STATE_RELEASED);
     m_manager->sendPointerFrame();
+    m_keybinds->resetInput();
+    m_actionState = makeUnique<Config::Actions::CActionState>();
+    m_nativeKeys.clear();
+    if (m_nativeControl) {
+        m_manager->setKeyboard(m_keyboards.empty() ? nullptr : m_keyboards.back());
+        m_manager->setMouse(m_pointers.empty() ? nullptr : m_pointers.back());
+        if (g_pSeatManager->m_keyboard)
+            g_pSeatManager->m_keyboard->m_active = true;
+    }
+    m_nativeControl = false;
     m_buttons.clear();
     m_deviceButtons.clear();
     focusWindow(nullptr);
@@ -242,8 +258,8 @@ void CSeatDesktop::setPaused(bool paused, bool composedKeyboard) {
     ++m_controlGeneration;
     m_captureGrant.clear();
     m_paused = paused;
-    // Broker input already composes Unicode (or runs the physical seat's IME
-    // in a human viewer). Do not compose those keys a second time on this seat.
+    // Broker input already composes Unicode. Native physical control uses
+    // this seat's input-method relay instead.
     // Bind this mode to the control generation; pause/resume resets it.
     m_composedKeyboard = !paused && composedKeyboard;
     IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("{},{},{}", protocol()->seatName(), m_controlGeneration, m_paused ? "paused" : "active")});
@@ -293,7 +309,7 @@ void CSeatDesktop::retire() {
 }
 
 void CSeatDesktop::updateCapabilities() {
-    uint32_t caps = 0;
+    uint32_t caps = m_nativeControl ? HID_INPUT_CAPABILITY_POINTER | (m_manager->m_keyboard ? HID_INPUT_CAPABILITY_KEYBOARD : 0) : 0;
     if (!m_keyboards.empty())
         caps |= HID_INPUT_CAPABILITY_KEYBOARD;
     if (!m_pointers.empty())
@@ -311,15 +327,20 @@ void CSeatDesktop::attachKeyboard(SP<IKeyboard> keyboard) {
     m_listeners.emplace_back(keyboard->m_events.destroy.listen([this, device = keyboard.get()] {
         auto keepAlive = device->m_self.lock();
         m_manager->m_keyboardEventHandlers.onKeyboardRemoved(keepAlive);
+        const bool currentGeneration = m_deviceGenerations.contains(device) && m_deviceGenerations[device] == m_controlGeneration;
         m_deviceGenerations.erase(device);
         std::erase_if(m_keyboards, [device](const auto& other) { return other.get() == device; });
         if (m_manager->m_keyboard == keepAlive) {
-            if (m_keyboards.empty())
-                m_manager->setKeyboardFocus(nullptr);
-            m_manager->setKeyboard(m_keyboards.empty() ? nullptr : m_keyboards.back());
+            if (m_nativeControl)
+                m_manager->setKeyboard(g_pSeatManager->m_keyboard.lock());
+            else {
+                if (m_keyboards.empty())
+                    m_manager->setKeyboardFocus(nullptr);
+                m_manager->setKeyboard(m_keyboards.empty() ? nullptr : m_keyboards.back());
+            }
         }
         updateCapabilities();
-        if (m_active && m_managedControl && !m_paused &&
+        if (currentGeneration && m_active && m_managedControl && !m_paused && !m_nativeControl &&
             std::ranges::none_of(m_keyboards, [this](const auto& keyboard) { return m_deviceGenerations[keyboard.get()] == m_controlGeneration; }))
             setPaused(true);
     }));
@@ -336,8 +357,10 @@ void CSeatDesktop::attachKeyboard(SP<IKeyboard> keyboard) {
             m_manager->updateActiveKeyboardData();
     }));
     updateCapabilities();
-    m_manager->setKeyboard(keyboard);
-    refocus(0, true);
+    if (!m_nativeControl) {
+        m_manager->setKeyboard(keyboard);
+        refocus(0, true);
+    }
 }
 
 void CSeatDesktop::attachPointer(SP<IPointer> pointer) {
@@ -352,14 +375,15 @@ void CSeatDesktop::attachPointer(SP<IPointer> pointer) {
         for (const auto code : owned)
             button(IPointer::SButtonEvent{.timeMs = Time::millis(Time::steadyNow()), .button = code, .state = WL_POINTER_BUTTON_STATE_RELEASED}, device);
         m_deviceButtons.erase(device);
+        const bool currentGeneration = m_deviceGenerations.contains(device) && m_deviceGenerations[device] == m_controlGeneration;
         m_deviceGenerations.erase(device);
         std::erase_if(m_pointers, [device](const auto& other) { return other.get() == device; });
         if (m_manager->m_mouse == keepAlive)
-            m_manager->setMouse(m_pointers.empty() ? nullptr : m_pointers.back());
-        if (m_pointers.empty())
+            m_manager->setMouse(m_nativeControl ? g_pSeatManager->m_mouse.lock() : m_pointers.empty() ? nullptr : m_pointers.back());
+        if (m_pointers.empty() && !m_nativeControl)
             m_manager->setPointerFocus(nullptr, {});
         updateCapabilities();
-        if (m_active && m_managedControl && !m_paused &&
+        if (currentGeneration && m_active && m_managedControl && !m_paused && !m_nativeControl &&
             std::ranges::none_of(m_pointers, [this](const auto& pointer) { return m_deviceGenerations[pointer.get()] == m_controlGeneration; }))
             setPaused(true);
     }));
@@ -388,8 +412,12 @@ void CSeatDesktop::attachPointer(SP<IPointer> pointer) {
     refocus();
 }
 
+UP<Config::Actions::CActionState>& CSeatDesktop::actionState() {
+    return m_actionState;
+}
+
 std::vector<uint32_t> CSeatDesktop::pressedKeys() const {
-    std::vector<uint32_t> keys;
+    std::vector<uint32_t> keys = m_nativeKeys;
     for (const auto& keyboard : m_keyboards) {
         if (m_deviceGenerations.at(keyboard.get()) != m_controlGeneration || !keyboard->m_enabled || !keyboard->m_allowed)
             continue;
@@ -401,13 +429,27 @@ std::vector<uint32_t> CSeatDesktop::pressedKeys() const {
     return keys;
 }
 
-void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard) {
-    if (!inputAllowed() || m_deviceGenerations[keyboard.get()] != m_controlGeneration || !keyboard->m_enabled || !keyboard->m_allowed)
+void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard, bool native) {
+    // Input-method feedback is owned by this seat's live grab, not by an
+    // automation generation. Do not rematch shortcuts or loop it into the IME.
+    const auto inputMethod = m_relay->m_inputMethod.lock();
+    if (inputAllowed() && m_nativeControl && !native && inputMethod && inputMethod->hasGrab() && keyboard->getClient() && inputMethod->grabClient() == keyboard->getClient()) {
+        m_manager->sendKeyboardKey(event.timeMs, event.keycode, event.state);
+        return;
+    }
+    if (!inputAllowed() || (native ? !m_nativeControl : m_deviceGenerations[keyboard.get()] != m_controlGeneration) || !keyboard->m_enabled || !keyboard->m_allowed)
         return;
     if (m_window && (m_window->m_workspace != workspace() || !m_window->mapped() || !m_window->acceptsInput())) {
         focusWindow(nullptr);
         refocus(0, true);
     }
+    if (native) {
+        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED && std::ranges::find(m_nativeKeys, event.keycode) == m_nativeKeys.end())
+            m_nativeKeys.push_back(event.keycode);
+        else if (event.state == WL_KEYBOARD_KEY_STATE_RELEASED)
+            std::erase(m_nativeKeys, event.keycode);
+    }
+    SeatInput::CActionScope actionScope(this);
     m_manager->setKeyboard(keyboard);
     if (event.keycode == 1 && event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
         PROTO::data->abortDndIfPresent(m_manager.get());
@@ -417,9 +459,16 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
         keyboardModifiers(keyboard);
     }
     // Numeric workspace bindings remain scoped to this desktop's namespace.
-    if (event.keycode >= 2 && event.keycode <= 11 && xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE)) {
-        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
-            switchWorkspace("name:cornice-agent-" + protocol()->seatName() + "-ws-" + std::to_string(event.keycode == 11 ? 10 : event.keycode - 1));
+    if (event.keycode >= 2 && event.keycode <= 11 && xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) &&
+        !xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) &&
+        !xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE)) {
+        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+            const auto target = "name:cornice-agent-" + protocol()->seatName() + "-ws-" + std::to_string(event.keycode == 11 ? 10 : event.keycode - 1);
+            if (xkb_state_mod_name_is_active(keyboard->m_xkbState, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE))
+                Config::Actions::moveToWorkspace(target, true);
+            else
+                switchWorkspace(target);
+        }
         return;
     }
     // This shortcut belongs to the secondary seat, never the human bind table.
@@ -428,6 +477,8 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
             IPC::Socket2::sock()->postEvent({"seatshortcut", protocol()->seatName() + ",prompt"});
         return;
     }
+    if (!m_keybinds->onKeyEvent(event, keyboard))
+        return;
     if (m_manager->m_keyboardEventHandlers.dispatch(event, keyboard, true))
         return;
     const auto ime = m_relay->m_inputMethod.lock();
@@ -438,8 +489,14 @@ void CSeatDesktop::keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> 
         m_manager->sendKeyboardKey(event.timeMs, event.keycode, event.state);
 }
 
-void CSeatDesktop::keyboardModifiers(SP<IKeyboard> keyboard) {
-    if (!inputAllowed() || m_deviceGenerations[keyboard.get()] != m_controlGeneration || !keyboard->m_enabled || !keyboard->m_allowed)
+void CSeatDesktop::keyboardModifiers(SP<IKeyboard> keyboard, bool native) {
+    const auto inputMethod = m_relay->m_inputMethod.lock();
+    if (inputAllowed() && m_nativeControl && !native && inputMethod && inputMethod->hasGrab() && keyboard->getClient() && inputMethod->grabClient() == keyboard->getClient()) {
+        const auto mods = keyboard->m_modifiersState;
+        m_manager->sendKeyboardMods(mods.depressed, mods.latched, mods.locked, mods.group);
+        return;
+    }
+    if (!inputAllowed() || (native ? !m_nativeControl : m_deviceGenerations[keyboard.get()] != m_controlGeneration) || !keyboard->m_enabled || !keyboard->m_allowed)
         return;
     m_manager->setKeyboard(keyboard);
     uint32_t depressed = keyboard->m_modifiersState.depressed;
@@ -479,6 +536,11 @@ void CSeatDesktop::warp(const IPointer::SMotionAbsoluteEvent& event) {
 void CSeatDesktop::button(const IPointer::SButtonEvent& event, IPointer* device) {
     if (!inputAllowed())
         return;
+    SeatInput::CActionScope actionScope(this);
+    if (event.state == WL_POINTER_BUTTON_STATE_PRESSED)
+        refocus(event.timeMs, true);
+    if (!m_keybinds->onMouseEvent(event, device ? device->m_self.lock() : m_manager->m_mouse.lock()))
+        return;
     auto& owned = m_deviceButtons[device];
     if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
         if (std::ranges::find(owned, event.button) != owned.end())
@@ -506,8 +568,29 @@ void CSeatDesktop::button(const IPointer::SButtonEvent& event, IPointer* device)
 }
 
 void CSeatDesktop::axis(const IPointer::SAxisEvent& event) {
-    if (inputAllowed())
-        m_manager->sendPointerAxis(event.timeMs, event.axis, event.delta, event.deltaDiscrete / 120, event.deltaDiscrete, event.source, event.relativeDirection);
+    SeatInput::CActionScope actionScope(this);
+    if (!inputAllowed() || !m_keybinds->onAxisEvent(event, m_manager->m_mouse.lock()))
+        return;
+    double factor   = 1.0;
+    auto   value120 = event.deltaDiscrete;
+    if (m_nativeControl) {
+        static auto mouseFactor = CConfigValue<Config::FLOAT>("input:scroll_factor");
+        static auto touchFactor = CConfigValue<Config::FLOAT>("input:touchpad:scroll_factor");
+        const bool  touch       = *touchFactor <= 0.F || event.source == WL_POINTER_AXIS_SOURCE_FINGER;
+        factor                  = touch ? *touchFactor : *mouseFactor;
+        if (const auto pointer = m_manager->m_mouse.lock(); pointer && pointer->m_scrollFactor)
+            factor = *pointer->m_scrollFactor;
+        if (const auto window = m_window.lock()) {
+            if (touch && window->isScrollTouchpadOverridden())
+                factor = window->getScrollTouchpad();
+            else if (!touch && window->isScrollMouseOverridden())
+                factor = window->getScrollMouse();
+        }
+        if (event.source == WL_POINTER_AXIS_SOURCE_WHEEL && !value120 && event.delta)
+            value120 = std::round(event.delta * 8.0);
+    }
+    m_manager->sendPointerAxis(event.timeMs, event.axis, event.delta * factor, static_cast<int32_t>(value120 ? std::copysign(factor, value120) : 0),
+                               static_cast<int32_t>(std::round(value120 * factor)), event.source, event.relativeDirection);
 }
 
 void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface) {
@@ -675,7 +758,8 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly
 }
 
 void CSeatDesktopRegistry::refreshWorkspace(PHLWORKSPACE workspace) {
-    if (!workspace || (workspace->visible() && !g_pSessionLockManager->isSessionLocked() && workspace->m_monitor && workspace->m_monitor->m_dpmsStatus))
+    if (!workspace || (g_pSeatPresentation && g_pSeatPresentation->active() && g_pSeatPresentation->workspace() == workspace) ||
+        (workspace->visible() && !g_pSessionLockManager->isSessionLocked() && workspace->m_monitor && workspace->m_monitor->m_dpmsStatus))
         return;
     const auto now  = Time::steadyNow();
     auto       tick = [&now](SP<CWLSurfaceResource> surface) {
@@ -705,6 +789,7 @@ class CSharedPrimarySeat : public IWaylandProtocol {
 };
 
 CSeatDesktopRegistry::CSeatDesktopRegistry() {
+    g_pSeatPresentation  = makeUnique<CSeatPresentation>();
     m_sharedPrimarySeat  = makeUnique<CSharedPrimarySeat>();
     m_privateOutputAdded = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR monitor) {
         if (m_pendingPrivateOutputs.erase(monitor->m_name))
@@ -713,6 +798,7 @@ CSeatDesktopRegistry::CSeatDesktopRegistry() {
     m_frameTimer         = makeShared<CEventLoopTimer>(
         std::nullopt,
         [this](auto timer, void*) {
+            g_pSeatPresentation->validate();
             if (g_pHyprRenderer && g_pSessionLockManager) {
                 std::vector<PHLWORKSPACE> updated;
                 for (const auto& seat : m_seats) {
@@ -732,6 +818,8 @@ CSeatDesktopRegistry::CSeatDesktopRegistry() {
 }
 
 CSeatDesktopRegistry::~CSeatDesktopRegistry() {
+    g_pSeatPresentation->clear();
+    g_pSeatPresentation.reset();
     m_frameTimer->cancel();
 }
 

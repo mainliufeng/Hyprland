@@ -1,3 +1,4 @@
+#include "../managers/SeatPresentation.hpp"
 #include "../managers/SeatDesktop.hpp"
 #include "Renderer.hpp"
 #include "../protocols/types/Buffer.hpp"
@@ -994,7 +995,9 @@ SP<ITexture> IHyprRenderer::createTexture(const SP<Aquamarine::IBuffer> buffer, 
 void IHyprRenderer::renderLayer(CRenderContext& ctx, PHLLS pLayer, PHLMONITOR pMonitor, const Time::steady_tp& time, bool popups, bool lockscreen) {
     if (!pLayer)
         return;
-    if (ctx.m_renderingSnapshot && ctx.m_sceneSeat && pLayer->seatDesktop() != ctx.m_sceneSeat)
+    if (ctx.m_sceneSeat && pLayer->seatDesktop() != ctx.m_sceneSeat)
+        return;
+    if (ctx.m_sceneSeat && !ctx.m_renderingSnapshot && g_pSeatPresentation->active() && (pLayer->m_namespace == "cornice-bar" || pLayer->m_namespace == "cornice-desktop-menu"))
         return;
 
     if (!pLayer->mapped() || !pLayer->acceptsInput() || !pLayer->alphaNonZero())
@@ -2304,7 +2307,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast();
+    const bool canAttemptDirectScanout = !g_pSeatPresentation->activeFor(pMonitor) && pMonitor->canAttemptDirectScanoutFast();
     const auto presentationMode =
         shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE : Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC;
     if (pMonitor->m_output->state->state().presentationMode != presentationMode)
@@ -2397,13 +2400,14 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     bool renderCursor = true;
 
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+    if (!g_pSeatPresentation->activeFor(pMonitor) && pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
         renderWindow(ctx, pMonitor->m_solitaryClient.lock(), pMonitor, pMonitor->m_solitaryClient->presentation().renderPresentation(), NOW, false,
                      RENDER_PASS_MAIN /* solitary = no popups */);
     else if (!finalDamage.empty()) {
         const bool    IS_MIRROR = pMonitor->isMirror();
         CMonitorScene scene(pMonitor);
-        scene.draw(ctx, NOW);
+        if (!g_pSeatPresentation->draw(ctx, pMonitor, NOW))
+            scene.draw(ctx, NOW);
 
         if (IS_MIRROR)
             renderCursor = false;
@@ -2432,6 +2436,9 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
                     damageBlinkCleanup = 0;
             }
         }
+    } else if (g_pSeatPresentation->activeFor(pMonitor)) {
+        const auto workspace = g_pSeatPresentation->workspace();
+        sendFrameEventsToWorkspace(workspace->m_monitor.lock(), workspace, NOW);
     } else if (!pMonitor->isMirror()) {
         if (pMonitor->m_activeWorkspace)
             sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
@@ -2439,7 +2446,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
             sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
     }
 
-    renderCursor = renderCursor && shouldRenderCursor();
+    renderCursor = renderCursor && shouldRenderCursor() && (!g_pSeatPresentation->activeFor(pMonitor) || !g_pSeatPresentation->controlling() || g_pSeatPresentation->overlay());
 
     if (renderCursor) {
         TRACY_GPU_ZONE("RenderCursor");
@@ -2967,6 +2974,17 @@ void IHyprRenderer::arrangeLayersForMonitor(const MONITORID& monitor) {
     g_layoutManager->invalidateMonitorGeometries(PMONITOR);
 }
 
+// Reuse the target output's normal damage scheduler for a presented scene.
+// No timer, capture or second framebuffer is involved in this routing.
+static void damageNativePresentation(const CBox& box) {
+    if (!g_pSeatPresentation || !g_pSeatPresentation->active())
+        return;
+    const auto source = g_pSeatPresentation->workspace()->m_monitor.lock();
+    const auto target = g_pSeatPresentation->output();
+    if (source && target && source != target && box.overlaps(source->logicalBox()))
+        target->addDamage(CBox{0, 0, INT16_MAX, INT16_MAX});
+}
+
 void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, double y, double scale) {
     if (!pSurface)
         return; // wut?
@@ -2978,6 +2996,8 @@ void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
     }
 
     const auto SURFACE_BOX = WLSURF->getSurfaceBoxGlobal();
+    if (SURFACE_BOX)
+        damageNativePresentation(*SURFACE_BOX);
 
     // hack: schedule frame events
     if (!pSurface->m_current.callbacks.empty() && SURFACE_BOX && !SURFACE_BOX->empty()) {
@@ -3025,6 +3045,8 @@ void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
 void IHyprRenderer::damageWindow(PHLWINDOW pWindow, bool forceFull) {
     CBox       windowBox        = pWindow->getFullWindowBoundingBox();
     const auto PWINDOWWORKSPACE = pWindow->m_workspace;
+    if (g_pSeatPresentation && g_pSeatPresentation->active() && PWINDOWWORKSPACE == g_pSeatPresentation->workspace())
+        damageMonitor(g_pSeatPresentation->output());
     if (PWINDOWWORKSPACE && PWINDOWWORKSPACE->m_renderOffset->isBeingAnimated() && !(pWindow->m_state & WINDOW_STATE_PINNED))
         windowBox.translate(PWINDOWWORKSPACE->m_renderOffset->value());
     windowBox.translate(pWindow->presentation().floatingOffset());
@@ -3048,6 +3070,7 @@ void IHyprRenderer::damageMonitor(PHLMONITOR pMonitor) {
     if (!pMonitor || pMonitor->isMirror())
         return;
 
+    damageNativePresentation(pMonitor->logicalBox());
     CBox damageBox = {0, 0, INT16_MAX, INT16_MAX};
     pMonitor->addDamage(damageBox);
 
@@ -3058,6 +3081,8 @@ void IHyprRenderer::damageMonitor(PHLMONITOR pMonitor) {
 }
 
 void IHyprRenderer::damageBox(const CBox& box, bool skipFrameSchedule) {
+    if (!skipFrameSchedule)
+        damageNativePresentation(box);
     for (auto const& m : State::monitorState()->monitors()) {
         if (m->isMirror())
             continue; // don't damage mirrors traditionally

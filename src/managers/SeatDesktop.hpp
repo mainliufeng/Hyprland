@@ -16,6 +16,13 @@ class IWaylandProtocol;
 class CXCursorManager;
 class CInputMethodRelay;
 class CSeatManager;
+class CSeatPresentation;
+namespace Keybinds {
+    class CKeybindManager;
+}
+namespace Config::Actions {
+    class CActionState;
+}
 class CWLSeatProtocol;
 class CWLSurfaceResource;
 class CVirtualKeyboardV1Resource;
@@ -71,6 +78,7 @@ class CSeatDesktop {
     Layout::Supplementary::CDragStateController* dragController() const;
     void                                         setCursorShape(const std::string& name);
 
+    UP<Config::Actions::CActionState>&           actionState();
     void                                         attachKeyboard(SP<IKeyboard> keyboard);
     void                                         attachPointer(SP<IPointer> pointer);
     void                                         focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr);
@@ -80,15 +88,18 @@ class CSeatDesktop {
     const std::vector<SP<IKeyboard>>&            keyboards() const;
 
   private:
+    friend class CSeatPresentation;
     static int                                           acceptClient(int fd, uint32_t mask, void* data);
     void                                                 updateCapabilities();
-    void                                                 keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard);
-    void                                                 keyboardModifiers(SP<IKeyboard> keyboard);
+    void                                                 keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard, bool native = false);
+    void                                                 keyboardModifiers(SP<IKeyboard> keyboard, bool native = false);
     void                                                 move(const IPointer::SMotionEvent& event);
     void                                                 warp(const IPointer::SMotionAbsoluteEvent& event);
     void                                                 button(const IPointer::SButtonEvent& event, IPointer* device);
     void                                                 axis(const IPointer::SAxisEvent& event);
 
+    UP<Keybinds::CKeybindManager>                        m_keybinds;
+    UP<Config::Actions::CActionState>                    m_actionState;
     UP<CWLSeatProtocol>                                  m_protocol;
     UP<CSeatManager>                                     m_manager;
     UP<CInputMethodRelay>                                m_relay;
@@ -100,6 +111,8 @@ class CSeatDesktop {
     PHLMONITORREF                                        m_homeOutput;
     PHLWORKSPACE                                         m_workspace;
     PHLWINDOWREF                                         m_window;
+    bool                                                 m_nativeControl = false;
+    std::vector<uint32_t>                                m_nativeKeys;
     bool                                                 m_active              = true;
     bool                                                 m_composedKeyboard    = false;
     bool                                                 m_paused              = false;

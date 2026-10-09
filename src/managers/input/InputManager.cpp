@@ -1,3 +1,4 @@
+#include "../SeatPresentation.hpp"
 #include "../SeatDesktop.hpp"
 #include "InputManager.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
@@ -160,6 +161,8 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
     }
 
     const auto DELTA = *PNOACCEL == 1 ? unaccel : delta;
+    if (g_pSeatPresentation && g_pSeatPresentation->motion(e, DELTA))
+        return;
 
     if (e.mouse)
         recheckMouseWarpOnMouseInput();
@@ -187,6 +190,8 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
 }
 
 void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->absolute(e))
+        return;
     if (e.mouse)
         recheckMouseWarpOnMouseInput();
 
@@ -250,6 +255,8 @@ void CInputManager::sendMotionEventsToFocused() {
 }
 
 void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     m_lastInputMouse = mouse;
 
     if (g_pCompositor->m_isShuttingDown)
@@ -757,6 +764,10 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 }
 
 void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) {
+    if (g_pSeatPresentation && g_pSeatPresentation->controlling())
+        g_pSeatPresentation->seat()->manager()->setMouse(mouse);
+    if (g_pSeatPresentation && g_pSeatPresentation->button(e))
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.input.mouse.button.emit(e, info);
     if (info.cancelled)
@@ -990,6 +1001,10 @@ void CInputManager::processMouseDownKill(const IPointer::SButtonEvent& e) {
 }
 
 void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
+    if (g_pSeatPresentation && g_pSeatPresentation->controlling())
+        g_pSeatPresentation->seat()->manager()->setMouse(pointer);
+    if (g_pSeatPresentation && g_pSeatPresentation->axis(e))
+        return;
     static auto POFFWINDOWAXIS        = CConfigValue<Config::INTEGER>("input:off_window_axis_events");
     static auto PINPUTSCROLLFACTOR    = CConfigValue<Config::FLOAT>("input:scroll_factor");
     static auto PTOUCHPADSCROLLFACTOR = CConfigValue<Config::FLOAT>("input:touchpad:scroll_factor");
@@ -1116,6 +1131,8 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
 }
 
 void CInputManager::onPointerFrame() {
+    if (g_pSeatPresentation && g_pSeatPresentation->frame())
+        return;
     PROTO::inputCapture->frame();
 
     if (PROTO::inputCapture->isCaptured())
@@ -1722,6 +1739,8 @@ uint32_t CInputManager::hyprlandModsToXkb(SP<IKeyboard> relative, Input::Modifie
 void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> pKeyboard) {
     if (!pKeyboard->m_enabled || !pKeyboard->m_allowed)
         return;
+    if (g_pSeatPresentation && g_pSeatPresentation->key(event, pKeyboard))
+        return;
 
     const bool           DISALLOWACTION = pKeyboard->isVirtual() && shouldIgnoreVirtualKeyboard(pKeyboard);
 
@@ -1790,6 +1809,10 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
 }
 
 void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
+    if (!pKeyboard->m_enabled || !pKeyboard->m_allowed)
+        return;
+    if (g_pSeatPresentation && g_pSeatPresentation->modifiers(pKeyboard))
+        return;
     static auto PSENDMOD = CConfigValue<Hyprlang::INT>("input-capture:capture_modifiers");
     if (!pKeyboard->m_enabled)
         return;
@@ -2357,6 +2380,8 @@ void CInputManager::recheckMouseWarpOnMouseInput() {
 }
 
 void CInputManager::onSwipeBegin(IPointer::SSwipeBeginEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.gesture.swipe.begin.emit(e, info);
     if (info.cancelled)
@@ -2368,6 +2393,8 @@ void CInputManager::onSwipeBegin(IPointer::SSwipeBeginEvent e) {
 }
 
 void CInputManager::onSwipeUpdate(IPointer::SSwipeUpdateEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.gesture.swipe.update.emit(e, info);
     if (info.cancelled)
@@ -2379,6 +2406,8 @@ void CInputManager::onSwipeUpdate(IPointer::SSwipeUpdateEvent e) {
 }
 
 void CInputManager::onSwipeEnd(IPointer::SSwipeEndEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.gesture.swipe.end.emit(e, info);
     if (info.cancelled)
@@ -2390,6 +2419,8 @@ void CInputManager::onSwipeEnd(IPointer::SSwipeEndEvent e) {
 }
 
 void CInputManager::onPinchBegin(IPointer::SPinchBeginEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.gesture.pinch.begin.emit(e, info);
     if (info.cancelled)
@@ -2401,6 +2432,8 @@ void CInputManager::onPinchBegin(IPointer::SPinchBeginEvent e) {
 }
 
 void CInputManager::onPinchUpdate(IPointer::SPinchUpdateEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.gesture.pinch.update.emit(e, info);
     if (info.cancelled)
@@ -2412,6 +2445,8 @@ void CInputManager::onPinchUpdate(IPointer::SPinchUpdateEvent e) {
 }
 
 void CInputManager::onPinchEnd(IPointer::SPinchEndEvent e) {
+    if (g_pSeatPresentation && g_pSeatPresentation->active())
+        return;
     Event::SCallbackInfo info;
     Event::bus()->m_events.gesture.pinch.end.emit(e, info);
     if (info.cancelled)

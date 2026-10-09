@@ -1,3 +1,5 @@
+#include "../managers/SeatActionContext.hpp"
+#include "../managers/SeatDesktop.hpp"
 #include "LayoutManager.hpp"
 
 #include "../ipc/s2/S2.hpp"
@@ -95,7 +97,7 @@ Config::ErrorResult CLayoutManager::layoutMsg(const std::string_view& sv) {
     if (!MONITOR)
         return Config::configError("No monitor, can't find ws to target", Config::eConfigErrorLevel::ERROR, Config::eConfigErrorCode::NO_TARGET);
 
-    auto ws = MONITOR->m_activeSpecialWorkspace ? MONITOR->m_activeSpecialWorkspace : MONITOR->m_activeWorkspace;
+    auto ws = SeatInput::current() ? SeatInput::current()->workspace() : MONITOR->m_activeSpecialWorkspace ? MONITOR->m_activeSpecialWorkspace : MONITOR->m_activeWorkspace;
 
     if (!ws)
         return Config::configError("No workspace, can't target", Config::eConfigErrorLevel::ERROR, Config::eConfigErrorCode::NO_TARGET);

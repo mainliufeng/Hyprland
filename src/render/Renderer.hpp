@@ -45,6 +45,7 @@ class IHLBuffer;
 class CEventLoopTimer;
 class CToplevelExportProtocolManager;
 class CInputManager;
+class CSeatPresentation;
 struct SSessionLockSurface;
 struct SBackdropScope;
 namespace Screenshare {
@@ -333,6 +334,8 @@ namespace Render {
         friend class CToplevelExportFrame;
         friend class Screenshare::CScreenshareFrame;
         friend class CInputManager;
+        friend class ::CSeatPresentation;
+        class CSeatPresentation;
         friend class Pointer::CPointerManager;
         friend class Monitor::CMonitor;
         friend class CMonitorFrameScheduler;

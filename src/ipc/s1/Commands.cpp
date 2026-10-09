@@ -1,3 +1,5 @@
+#include "../../managers/SeatPresentation.hpp"
+#include "../../managers/SeatActionContext.hpp"
 #include "../../managers/SeatDesktop.hpp"
 #include "../../protocols/core/Seat.hpp"
 #include "Commands.hpp"
@@ -1970,22 +1972,40 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
     return std::format("{{\"name\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\",\"paused\":{},\"available\":{},"
                        "\"humanLockPolicy\":\"{}\",\"humanLocked\":{},\"lockScope\":\"{}\",\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\","
                        "\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
-                       "\"windowId\":\"{}\",\"window\":\"{}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
+                       "\"windowId\":\"{}\",\"window\":\"{}\",\"windowAddress\":\"0x{:x}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
                        "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
                        escapeJSONStrings(seat->protocol()->seatName()), escapeJSONStrings(seat->socketName()), seat->controlGeneration(), seat->paused(), seat->viewAvailable(),
                        seat->continuesOnHumanLock() ? "continue" : "pause", g_pSessionLockManager->isSessionLocked(),
                        g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->humanScope() ? "human" : "session") : "none", g_pSessionLockManager->lockEpoch(),
                        seat->viewEpoch(), escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()), escapeJSONStrings(seat->workspace()->addressableName()),
                        escapeJSONStrings(view->addressableName()), g_pSeatDesktopRegistry->windowIdentity(seat->window()),
-                       seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "", cursor.x, cursor.y, view == seat->workspace(), output->m_position.x,
-                       output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x, output->m_transformedSize.y, output->m_scale,
-                       static_cast<int>(output->m_transform));
+                       seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "", rc<uintptr_t>(seat->window().get()), cursor.x, cursor.y,
+                       view == seat->workspace(), output->m_position.x, output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x,
+                       output->m_transformedSize.y, output->m_scale, static_cast<int>(output->m_transform));
 }
 
 static std::string seatRequest(eHyprCtlOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input","seat-shell-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","human-lock-v1","agent-private-output","lock-aware-seat-input","lock-aware-agent-export","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1"]})";
+    if (args.size() == 7 && args[1] == "present")
+        return g_pSeatPresentation->show(args[2], args[3], State::monitorState()->query().name(args[4]).run(), args[5], args[6]);
+    if (args.size() == 3 && args[1] == "presentation")
+        return g_pSeatPresentation->status(args[2]);
+    if (args.size() == 3 && args[1] == "unpresent")
+        return g_pSeatPresentation->hide(args[2]);
+    if (args.size() == 4 && args[1] == "present-control" && (args[3] == "yes" || args[3] == "no"))
+        return g_pSeatPresentation->control(args[2], args[3] == "yes");
+    if (args.size() >= 6 && args[1] == "dispatch") {
+        const auto seat = g_pSeatDesktopRegistry->forName(args[2]);
+        if (!seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4] || !seat->inputAllowed())
+            return "stale or unavailable seat dispatcher";
+        const auto prefix = std::format("seat dispatch {} {} {} ", args[2], args[3], args[4]);
+        if (!request.starts_with(prefix))
+            return "invalid seat dispatcher";
+        SeatInput::CActionScope actionScope(seat);
+        return dispatchRequest(format, "dispatch " + request.substr(prefix.size()));
+    }
     if (args.size() == 2 && args[1] == "lock-state")
         return g_pSessionLockManager->protectionStateJSON();
     if (args.size() == 3 && args[1] == "create-private-output")

@@ -1,5 +1,6 @@
 #include "../../managers/SeatDesktop.hpp"
 #include "FocusState.hpp"
+#include "../../managers/SeatActionContext.hpp"
 #include "../view/window/WindowFullscreenPolicy.hpp"
 #include "../view/window/WindowGroupMembership.hpp"
 #include "../view/window/Window.hpp"
@@ -98,6 +99,10 @@ void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWL
 }
 
 void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface) {
+    if (auto seat = SeatInput::current()) {
+        seat->focusWindow(pWindow, surface);
+        return;
+    }
     if (pWindow && g_pSeatDesktopRegistry->isPrivateOutput(pWindow->m_monitor.lock()))
         return;
     static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
@@ -233,6 +238,10 @@ void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLS
 }
 
 void CFocusState::rawSurfaceFocus(SP<CWLSurfaceResource> pSurface, PHLWINDOW pWindowOwner) {
+    if (auto seat = SeatInput::current()) {
+        seat->manager()->setKeyboardFocus(pSurface);
+        return;
+    }
     if (g_pSeatManager->m_state.keyboardFocus == pSurface || (pWindowOwner && g_pSeatManager->m_state.keyboardFocus == pWindowOwner->wlSurface()->resource()))
         return; // Don't focus when already focused on this.
 
@@ -272,6 +281,8 @@ void CFocusState::rawSurfaceFocus(SP<CWLSurfaceResource> pSurface, PHLWINDOW pWi
 }
 
 void CFocusState::rawMonitorFocus(PHLMONITOR pMonitor) {
+    if (SeatInput::current())
+        return;
     if (g_pSeatDesktopRegistry->isPrivateOutput(pMonitor))
         return;
     if (m_focusMonitor == pMonitor)
@@ -295,15 +306,15 @@ void CFocusState::rawMonitorFocus(PHLMONITOR pMonitor) {
 }
 
 SP<CWLSurfaceResource> CFocusState::surface() {
-    return m_focusSurface.lock();
+    return SeatInput::current() ? SeatInput::current()->manager()->m_state.keyboardFocus.lock() : m_focusSurface.lock();
 }
 
 PHLWINDOW CFocusState::window() {
-    return m_focusWindow.lock();
+    return SeatInput::current() ? SeatInput::current()->window() : m_focusWindow.lock();
 }
 
 PHLMONITOR CFocusState::monitor() {
-    return m_focusMonitor.lock();
+    return SeatInput::current() ? SeatInput::current()->monitor() : m_focusMonitor.lock();
 }
 
 void CFocusState::resetWindowFocus() {
