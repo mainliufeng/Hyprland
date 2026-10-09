@@ -1173,12 +1173,14 @@ void CPointerManager::attachPointer(SP<IPointer> pointer) {
         PROTO::idle->onActivity();
     });
 
-    listener->holdBegin = pointer->m_pointerEvents.holdBegin.listen([](const IPointer::SHoldBeginEvent& event) {
+    listener->holdBegin = pointer->m_pointerEvents.holdBegin.listen([pointer](const IPointer::SHoldBeginEvent& event) {
+        if (!g_pSeatDesktopRegistry->primaryInput(pointer.get())) return;
         PROTO::pointerGestures->holdBegin(event.timeMs, event.fingers);
         PROTO::idle->onActivity();
     });
 
-    listener->holdEnd = pointer->m_pointerEvents.holdEnd.listen([](const IPointer::SHoldEndEvent& event) {
+    listener->holdEnd = pointer->m_pointerEvents.holdEnd.listen([pointer](const IPointer::SHoldEndEvent& event) {
+        if (!g_pSeatDesktopRegistry->primaryInput(pointer.get())) return;
         PROTO::pointerGestures->holdEnd(event.timeMs, event.cancelled);
         PROTO::idle->onActivity();
     });

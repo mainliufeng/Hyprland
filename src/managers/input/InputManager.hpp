@@ -218,6 +218,7 @@ class CInputManager {
     std::string getNameForNewDevice(std::string);
 
     void        releaseAllMouseButtons();
+    void        releasePrimaryAgentInput();
 
     // for some bugs in follow mouse 0
     bool m_lastFocusOnLS = false;

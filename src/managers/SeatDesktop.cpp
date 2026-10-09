@@ -885,7 +885,7 @@ std::string CSeatDesktopRegistry::create(const std::string& name, PHLMONITOR mon
     if (g_pSessionLockManager->isSessionLocked())
         return "cannot create seats while locked";
     collectRetired();
-    if (name.empty() || name == HL_SEAT_NAME || name.size() > 64 ||
+    if (name.empty() || name == "main" || name == HL_SEAT_NAME || name.size() > 64 ||
         name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") != std::string::npos)
         return "invalid or reserved seat name";
     if (forName(name))
@@ -1082,4 +1082,37 @@ std::string CSeatDesktopRegistry::createPrivateOutput(const std::string& name) {
     }
     m_pendingPrivateOutputs.erase(name);
     return "headless output creation failed";
+}
+
+
+uint64_t CSeatDesktopRegistry::primaryGeneration() const { return m_primaryGeneration; }
+bool CSeatDesktopRegistry::primaryPaused() const { return m_primaryPaused; }
+void CSeatDesktopRegistry::setPrimaryPaused(bool paused, pid_t owner) {
+    if (!paused && (owner <= 0 || g_pSessionLockManager->isSessionLocked() || g_pSeatPresentation->active()))
+        return;
+    if (m_primaryPaused && paused)
+        return;
+    m_primaryPaused = paused;
+    m_primaryOwner = paused ? 0 : owner;
+    m_primaryCaptureGrant.clear();
+    ++m_primaryGeneration;
+    if (paused) g_pInputManager->releasePrimaryAgentInput();
+    IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("main,{},{}", m_primaryGeneration, paused ? "paused" : "active")});
+}
+uint64_t CSeatDesktopRegistry::primaryClientGeneration(wl_client* client) const {
+    pid_t pid = 0;
+    if (client) wl_client_get_credentials(client, &pid, nullptr, nullptr);
+    return !m_primaryPaused && pid == m_primaryOwner ? m_primaryGeneration : 0;
+}
+bool CSeatDesktopRegistry::primaryInput(IHID* device) {
+    if (device && device->m_primaryControlGeneration)
+        return !m_primaryPaused && device->m_primaryControlGeneration == m_primaryGeneration &&
+            !g_pSessionLockManager->isSessionLocked() && !g_pSeatPresentation->active();
+    // Any native input takes control before the event can change focus/cursor.
+    if (!m_primaryPaused) setPrimaryPaused(true);
+    return true;
+}
+void CSeatDesktopRegistry::setPrimaryCaptureGrant(const std::string& grant) { m_primaryCaptureGrant = grant; }
+bool CSeatDesktopRegistry::primaryCaptureGranted(const std::string& grant) const {
+    return !m_primaryPaused && !grant.empty() && grant == m_primaryCaptureGrant && !g_pSessionLockManager->isSessionLocked();
 }

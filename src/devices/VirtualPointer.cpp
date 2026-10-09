@@ -1,4 +1,6 @@
 #include "VirtualPointer.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatManager.hpp"
 #include "../protocols/VirtualPointer.hpp"
 #include <aquamarine/input/Input.hpp>
 
@@ -15,6 +17,9 @@ CVirtualPointer::CVirtualPointer(SP<CVirtualPointerV1Resource> resource) : m_poi
         return;
 
     m_listeners.destroy = m_pointer->m_events.destroy.listen([this] {
+        if (m_primaryControlGeneration && g_pSeatDesktopRegistry &&
+            m_primaryControlGeneration == g_pSeatDesktopRegistry->primaryGeneration())
+            g_pSeatDesktopRegistry->setPrimaryPaused(true);
         m_pointer.reset();
         m_events.destroy.emit();
     });
@@ -42,6 +47,8 @@ CVirtualPointer::CVirtualPointer(SP<CVirtualPointerV1Resource> resource) : m_poi
 
     m_boundOutput = resource->m_boundOutput ? resource->m_boundOutput->m_name : "";
 
+    if (resource->manager() == g_pSeatManager.get())
+        m_primaryControlGeneration = g_pSeatDesktopRegistry->primaryClientGeneration(resource->client());
     m_deviceName = m_pointer->m_name;
 }
 

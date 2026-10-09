@@ -3437,7 +3437,7 @@ std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDes
     const auto now = Time::steadyNow();
     // A private desktop includes its real bar, menus and prompt surface. Shared
     // workspace captures retain their window-only policy (no human shell).
-    const auto scene = seat && g_pSeatDesktopRegistry->isPrivateOutput(monitor) ? eSceneMode::WORKSPACE_WITH_SHELL : eSceneMode::WORKSPACE_WINDOWS;
+    const auto scene = !seat || g_pSeatDesktopRegistry->isPrivateOutput(monitor) ? eSceneMode::WORKSPACE_WITH_SHELL : eSceneMode::WORKSPACE_WINDOWS;
     renderWorkspace(m_context, workspace, now, scene);
     const bool cursorVisible = !seat || seat->workspace() == workspace;
     if (seat && cursorVisible)

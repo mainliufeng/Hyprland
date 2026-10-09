@@ -1,4 +1,5 @@
 #include "../SeatPresentation.hpp"
+#include "../SeatDesktop.hpp"
 #include "InputManager.hpp"
 #include "../SessionLockManager.hpp"
 #include "../../protocols/SessionLock.hpp"
@@ -16,6 +17,7 @@
 #include "UnifiedWorkspaceSwipeGesture.hpp"
 
 void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     m_lastInputTouch = true;
@@ -197,6 +199,7 @@ void CInputManager::onTouchCancel(ITouch::SCancelEvent e, SP<ITouch> device) {
 }
 
 void CInputManager::onTouchMove(ITouch::SMotionEvent e, SP<ITouch> device) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     m_lastInputTouch = true;

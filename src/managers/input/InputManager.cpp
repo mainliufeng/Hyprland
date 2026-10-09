@@ -142,6 +142,7 @@ CInputManager::~CInputManager() {
 }
 
 void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
+    if (!g_pSeatDesktopRegistry->primaryInput(e.device.get())) return;
     static auto PNOACCEL = CConfigValue<Config::INTEGER>("input:force_no_accel");
 
     Vector2D    delta   = e.delta;
@@ -190,6 +191,7 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
 }
 
 void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
+    if (!g_pSeatDesktopRegistry->primaryInput(e.device.get())) return;
     if (g_pSeatPresentation && g_pSeatPresentation->absolute(e))
         return;
     if (e.mouse)
@@ -764,6 +766,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 }
 
 void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) {
+    if (!g_pSeatDesktopRegistry->primaryInput(mouse.get())) return;
     if (g_pSeatPresentation && g_pSeatPresentation->controlling())
         g_pSeatPresentation->seat()->manager()->setMouse(mouse);
     if (g_pSeatPresentation && g_pSeatPresentation->button(e))
@@ -1001,6 +1004,7 @@ void CInputManager::processMouseDownKill(const IPointer::SButtonEvent& e) {
 }
 
 void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
+    if (!g_pSeatDesktopRegistry->primaryInput(pointer.get())) return;
     if (g_pSeatPresentation && g_pSeatPresentation->controlling())
         g_pSeatPresentation->seat()->manager()->setMouse(pointer);
     if (g_pSeatPresentation && g_pSeatPresentation->axis(e))
@@ -1737,6 +1741,7 @@ uint32_t CInputManager::hyprlandModsToXkb(SP<IKeyboard> relative, Input::Modifie
 }
 
 void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> pKeyboard) {
+    if (!g_pSeatDesktopRegistry->primaryInput(pKeyboard.get())) return;
     if (!pKeyboard->m_enabled || !pKeyboard->m_allowed)
         return;
     if (g_pSeatPresentation && g_pSeatPresentation->key(event, pKeyboard))
@@ -1745,7 +1750,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
     const bool           DISALLOWACTION = pKeyboard->isVirtual() && shouldIgnoreVirtualKeyboard(pKeyboard);
 
     const auto           IME    = m_relay.m_inputMethod.lock();
-    const bool           HASIME = IME && IME->hasGrab();
+    const bool           HASIME = IME && IME->hasGrab() && !pKeyboard->m_primaryControlGeneration;
     const bool           USEIME = HASIME && !DISALLOWACTION;
 
     Event::SCallbackInfo info;
@@ -1809,6 +1814,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
 }
 
 void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
+    if (!g_pSeatDesktopRegistry->primaryInput(pKeyboard.get())) return;
     if (!pKeyboard->m_enabled || !pKeyboard->m_allowed)
         return;
     if (g_pSeatPresentation && g_pSeatPresentation->modifiers(pKeyboard))
@@ -1820,7 +1826,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     const bool DISALLOWACTION = pKeyboard->isVirtual() && shouldIgnoreVirtualKeyboard(pKeyboard);
 
     const auto IME               = m_relay.m_inputMethod.lock();
-    const bool HASIME            = IME && IME->hasGrab();
+    const bool HASIME            = IME && IME->hasGrab() && !pKeyboard->m_primaryControlGeneration;
     const bool USEIME            = HASIME && !DISALLOWACTION;
     auto       MODS              = pKeyboard->m_modifiersState;
     const auto DEPRESSED_MODS_HL = xkbModsToHyprland(pKeyboard, MODS.depressed);
@@ -2225,6 +2231,7 @@ void CInputManager::newSwitch(SP<Aquamarine::ISwitch> pDevice) {
     PNEWDEV->listeners.destroy = pDevice->events.destroy.listen([this, PNEWDEV] { destroySwitch(PNEWDEV); });
 
     PNEWDEV->listeners.fire = pDevice->events.fire.listen([PNEWDEV](const Aquamarine::ISwitch::SFireEvent& event) {
+        g_pSeatDesktopRegistry->primaryInput(nullptr);
         const auto NAME = PNEWDEV->pDevice->getName();
 
         LOG(Log::DEBUG, "Switch {} fired, triggering binds.", NAME);
@@ -2380,6 +2387,7 @@ void CInputManager::recheckMouseWarpOnMouseInput() {
 }
 
 void CInputManager::onSwipeBegin(IPointer::SSwipeBeginEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     Event::SCallbackInfo info;
@@ -2393,6 +2401,7 @@ void CInputManager::onSwipeBegin(IPointer::SSwipeBeginEvent e) {
 }
 
 void CInputManager::onSwipeUpdate(IPointer::SSwipeUpdateEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     Event::SCallbackInfo info;
@@ -2406,6 +2415,7 @@ void CInputManager::onSwipeUpdate(IPointer::SSwipeUpdateEvent e) {
 }
 
 void CInputManager::onSwipeEnd(IPointer::SSwipeEndEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     Event::SCallbackInfo info;
@@ -2419,6 +2429,7 @@ void CInputManager::onSwipeEnd(IPointer::SSwipeEndEvent e) {
 }
 
 void CInputManager::onPinchBegin(IPointer::SPinchBeginEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     Event::SCallbackInfo info;
@@ -2432,6 +2443,7 @@ void CInputManager::onPinchBegin(IPointer::SPinchBeginEvent e) {
 }
 
 void CInputManager::onPinchUpdate(IPointer::SPinchUpdateEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     Event::SCallbackInfo info;
@@ -2445,6 +2457,7 @@ void CInputManager::onPinchUpdate(IPointer::SPinchUpdateEvent e) {
 }
 
 void CInputManager::onPinchEnd(IPointer::SPinchEndEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     Event::SCallbackInfo info;
@@ -2455,4 +2468,23 @@ void CInputManager::onPinchEnd(IPointer::SPinchEndEvent e) {
     g_pTrackpadGestures->gestureEnd(e);
 
     PROTO::pointerGestures->pinchEnd(e.timeMs, e.cancelled);
+}
+
+
+void CInputManager::releasePrimaryAgentInput() {
+    const auto now = Time::millis(Time::steadyNow());
+    if (g_pSeatManager->m_keyboard && g_pSeatManager->m_keyboard->m_primaryControlGeneration) {
+        for (const auto key : m_pressed) g_pSeatManager->sendKeyboardKey(now, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+        m_pressed.clear();
+        g_pSeatManager->sendKeyboardMods(0, 0, 0, 0);
+        m_lastMods = Input::ModifierMask{Input::HL_MODIFIER_NONE};
+    }
+    for (auto it = m_currentlyHeldButtons.begin(); it != m_currentlyHeldButtons.end();) {
+        const auto pointer = it->pointer.lock();
+        if (!pointer || !pointer->m_primaryControlGeneration) { ++it; continue; }
+        g_pSeatManager->sendPointerButton(now, it->button, WL_POINTER_BUTTON_STATE_RELEASED);
+        it = m_currentlyHeldButtons.erase(it);
+    }
+    g_pSeatManager->sendPointerFrame();
+    if (m_currentlyHeldButtons.empty()) m_focusHeldByButtons = false;
 }

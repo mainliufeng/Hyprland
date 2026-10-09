@@ -37,6 +37,8 @@ class IHID {
         CSignalT<> destroy;
     } m_events;
 
+    // Nonzero only for the broker's generation-bound primary input devices.
+    uint64_t              m_primaryControlGeneration = 0;
     std::string           m_deviceName;
     std::string           m_hlName;
     std::set<std::string> m_deviceTags;

@@ -1,4 +1,5 @@
 #include "../SeatPresentation.hpp"
+#include "../SeatDesktop.hpp"
 #include "InputManager.hpp"
 #include "../../desktop/view/window/Window.hpp"
 #include "../../protocols/Tablet.hpp"
@@ -108,6 +109,7 @@ static Vector2D transformToActiveRegion(const Vector2D pos, const CBox activeAre
 }
 
 void CInputManager::onTabletAxis(CTablet::SAxisEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     if (!e.tablet->m_enabled)
@@ -184,6 +186,7 @@ void CInputManager::onTabletAxis(CTablet::SAxisEvent e) {
 }
 
 void CInputManager::onTabletTip(CTablet::STipEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     if (!e.tablet->m_enabled) {
@@ -224,6 +227,7 @@ void CInputManager::onTabletTip(CTablet::STipEvent e) {
 }
 
 void CInputManager::onTabletButton(CTablet::SButtonEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     if (!e.tablet->m_enabled) {
@@ -254,6 +258,7 @@ void CInputManager::onTabletButton(CTablet::SButtonEvent e) {
 }
 
 void CInputManager::onTabletProximity(CTablet::SProximityEvent e) {
+    g_pSeatDesktopRegistry->primaryInput(nullptr);
     if (g_pSeatPresentation && g_pSeatPresentation->active())
         return;
     if (!e.tablet->m_enabled) {

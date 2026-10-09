@@ -431,6 +431,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
     initManagers(STAGE_LATE);
 
     m_listeners.lock = g_pSessionLockManager->m_events.lock.listen([this] {
+        g_pSeatDesktopRegistry->setPrimaryPaused(true);
         static int lock_count = 0;
         // lock_count used to avoid triggering condition on initial forceLock()
         if (m_startLocked && lock_count >= 1) {

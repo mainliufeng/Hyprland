@@ -142,8 +142,17 @@ class CSeatDesktop {
     std::vector<CHyprSignalListener>                     m_listeners;
 };
 
+class IHID;
+
 class CSeatDesktopRegistry {
   public:
+    uint64_t                             primaryGeneration() const;
+    bool                                 primaryPaused() const;
+    void                                 setPrimaryPaused(bool paused, pid_t owner = 0);
+    bool                                 primaryInput(IHID* device);
+    uint64_t                             primaryClientGeneration(wl_client* client) const;
+    void                                 setPrimaryCaptureGrant(const std::string& grant);
+    bool                                 primaryCaptureGranted(const std::string& grant) const;
     CSeatDesktopRegistry();
     ~CSeatDesktopRegistry();
     std::string                          create(const std::string& name, PHLMONITOR monitor);
@@ -172,6 +181,10 @@ class CSeatDesktopRegistry {
     std::unordered_set<std::string>                                 m_pendingPrivateOutputs;
     CHyprSignalListener                                             m_privateOutputAdded;
     SP<CEventLoopTimer>                                             m_frameTimer;
+    uint64_t                                                        m_primaryGeneration = 1;
+    bool                                                            m_primaryPaused = true;
+    pid_t                                                           m_primaryOwner = 0;
+    std::string                                                     m_primaryCaptureGrant;
     uint64_t                                                        m_nextWindowIdentity = 0;
     std::unordered_map<void*, std::pair<PHLWINDOWREF, std::string>> m_windowIdentities;
 };
