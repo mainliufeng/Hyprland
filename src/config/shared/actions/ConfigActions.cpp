@@ -549,7 +549,9 @@ ActionResult Actions::focus(PHLWINDOW window) {
     if (const auto seat = SeatInput::current(); seat && window && window->m_workspace) {
         if (window->m_workspace != seat->workspace())
             seat->switchWorkspace(Workspace::selector(*window->m_workspace));
-        seat->focusWindow(window);
+        // Apply the same fullscreen focus policy as the primary seat before
+        // its raw focus path rejects windows covered by the fullscreen one.
+        Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_DISPATCH_FOCUSWINDOW, nullptr, false);
         return {};
     }
     if (!window)
