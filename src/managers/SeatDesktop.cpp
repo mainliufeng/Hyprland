@@ -506,6 +506,10 @@ void CSeatDesktop::keyboardModifiers(SP<IKeyboard> keyboard, bool native) {
     for (const auto& other : m_keyboards) {
         if (m_deviceGenerations[other.get()] != m_controlGeneration || !other->m_enabled || !other->m_allowed || !other->shareStates())
             continue;
+        // The input method echoes this seat's modifier state. Merging that
+        // feedback into physical input latches a modifier after its release.
+        if (inputMethod && inputMethod->hasGrab() && other->getClient() == inputMethod->grabClient())
+            continue;
         depressed |= other->m_modifiersState.depressed;
         latched |= other->m_modifiersState.latched;
         locked |= other->m_modifiersState.locked;
