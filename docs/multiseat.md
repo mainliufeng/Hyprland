@@ -32,7 +32,7 @@ identify the capture; locks revoke protected exports.
 
 `seat present NAME SEAT_ID OUTPUT current|EXISTING_WS OWNER` creates a native
 readonly view. Its browse workspace is independent of the seat. Ordinary
-application input and mutating bindings are blocked. `seat takeover OWNER` routes
+application input and mutating bindings are blocked. `seat present-control OWNER yes` routes
 physical input through that seat's native managers and revokes automation.
 `seat unpresent OWNER` restores the physical desktop. No image forwarding is used.
 

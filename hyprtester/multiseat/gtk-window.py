@@ -1,4 +1,4 @@
-import os, sys, gi
+import os, sys, gi, json
 gi.require_version('Gtk','3.0')
 from gi.repository import Gtk, Gdk
 label, dest = sys.argv[1:]
@@ -30,6 +30,13 @@ def received(w,c,x,y,data,info,time):
     Gtk.drag_finish(c,True,False,time)
 target.connect('drag-data-received', received)
 box.pack_start(target,False,False,20)
+def allocation_changed(widget, allocation):
+    origin = entry.translate_coordinates(window, 0, 0)
+    if origin is not None:
+        size = entry.get_allocation()
+        with open(dest+'.geometry','w') as stream:
+            json.dump({'entry': [origin[0], origin[1], size.width, size.height]}, stream)
+box.connect('size-allocate', allocation_changed)
 window.add(box)
 window.connect('destroy',Gtk.main_quit)
 window.show_all()

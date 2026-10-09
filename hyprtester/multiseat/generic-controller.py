@@ -120,6 +120,37 @@ try:
     assert primary_state()==original
     key(primary,3); assert ctl('activeworkspace',True)['name']=='inherited'
     record('generic bindings override only the selected seat; existing primary shortcuts remain native without a shell')
+    target=BASE/'native-text'
+    application=subprocess.Popen(['/usr/bin/python3',str(FORK/'hyprtester/multiseat/gtk-window.py'),'generic-native',str(target)],
+        env=ENV|{'WAYLAND_DISPLAY':state()['display'],'GDK_BACKEND':'wayland','GTK_IM_MODULE':'wayland'},
+        stdout=open(BASE/'application.log','w'),stderr=subprocess.STDOUT,start_new_session=True)
+    PROCESSES.append(application)
+    wait(lambda:target.with_suffix('.ready').exists())
+    def plain_key(device,code):
+        for event in (f'key {code} 1',f'key {code} 0'):
+            device.stdin.write(event+'\n');device.stdin.flush()
+            assert select.select([device.stdout],[],[],5)[0] and device.stdout.readline().strip()=='done'
+    plain_key(background,18);wait(lambda:target.read_text()=='e')
+    capture=BASE/'native.png';capture.touch(mode=0o600)
+    frame=ctl('seat snapshot research '+state()['seatId']+' current png '+str(capture),True)
+    assert frame['window']=='generic-native' and frame['frameId'] and capture.read_bytes().startswith(b'\x89PNG') and capture.stat().st_size>1000
+    assert ctl('seat present research '+state()['seatId']+' physical current '+VIEW,True)['active']
+    plain_key(primary,45);time.sleep(.1);assert target.read_text()=='e'
+    assert ctl('seat present-control '+VIEW+' yes',True)['humanControl']
+    window=next(w for w in ctl('clients',True) if w['title']=='generic-native')
+    origin=state()['position']
+    allocation=wait(lambda:json.loads(target.with_suffix('.geometry').read_text()))['entry']
+    x=round(window['at'][0]-origin[0]+allocation[0]+allocation[2]/2)
+    y=round(window['at'][1]-origin[1]+allocation[1]+allocation[3]/2)
+    for event in (f'motion {x} {y}', 'button 272 1', 'button 272 0'):
+        send(primary,event)
+    wait(lambda:state()['window']=='generic-native')
+    plain_key(primary,45);wait(lambda:target.read_text()=='ex')
+    ctl('seat present-control '+VIEW+' no',True);ok('seat unpresent '+VIEW)
+    current=state();ctl('seat control research '+current['seatId']+' '+current['generation']+' resume',True)
+    background=device('research',state()['display'])
+    record('standalone controller captures a real GTK application, blocks readonly typing and routes native takeover input without a shell')
+    assert json.loads(configure())['configured']
     listener=socket.socket(socket.AF_UNIX);listener.settimeout(5);listener.bind(str(RT/'controller.sock'));listener.listen()
     event=receive(background); assert event['mode']=='control' and event['action']=='inspect'
     assert ctl('seat validate-context '+event['actionId']+' '+OWNER,True)['name']=='research'
