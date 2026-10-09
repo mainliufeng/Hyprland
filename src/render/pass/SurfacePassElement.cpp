@@ -7,6 +7,8 @@
 #include "../../managers/input/InputManager.hpp"
 #include "../../layout/LayoutManager.hpp"
 #include "../Renderer.hpp"
+#include "../../managers/SeatPresentation.hpp"
+#include "../../desktop/view/LayerSurface.hpp"
 
 #include <hyprutils/math/Box.hpp>
 #include <hyprutils/math/Vector2D.hpp>
@@ -178,8 +180,20 @@ CRegion CSurfacePassElement::visibleRegion(Render::CRenderContext& ctx, bool& ca
     return visibleRegion;
 }
 
+bool CSurfacePassElement::ownsFrameFeedback(Render::CRenderContext& ctx) const {
+    if (ctx.m_blockSurfaceFeedback)
+        return false;
+    if (!g_pSeatPresentation->active() || ctx.m_data.pMonitor == g_pSeatPresentation->output())
+        return true;
+    // The private output may still render the same scene. It must not consume
+    // feedback or frame callbacks belonging to the physical presentation.
+    if (m_data.pWindow && m_data.pWindow->m_workspace == g_pSeatPresentation->workspace())
+        return false;
+    return !m_data.pLS || m_data.pLS->seatDesktop() != g_pSeatPresentation->seat() || m_data.pLS->m_namespace == "cornice-bar" || m_data.pLS->m_namespace == "cornice-desktop-menu";
+}
+
 void CSurfacePassElement::discard(Render::CRenderContext& ctx) {
-    if (!ctx.m_blockSurfaceFeedback) {
+    if (ownsFrameFeedback(ctx)) {
         LOG(Log::TRACE, "discard for invisible surface");
         m_data.surface->presentFeedback(m_data.when, m_data.pMonitor->m_self.lock(), true);
     }

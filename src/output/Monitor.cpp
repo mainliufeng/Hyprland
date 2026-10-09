@@ -1,4 +1,5 @@
 #include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatPresentation.hpp"
 #include "Monitor.hpp"
 #include "../desktop/view/window/WindowEffectsController.hpp"
 #include "../desktop/view/window/WindowPresentation.hpp"
@@ -204,10 +205,15 @@ void CMonitor::onConnect(bool noRule) {
         auto mon = m_self.lock();
         if (!isMirror() && !g_pHyprRenderer->shouldRenderMonitor(mon)) {
             auto const NOW = Time::steadyNow();
-            if (m_activeWorkspace)
-                g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeWorkspace, NOW);
-            if (m_activeSpecialWorkspace)
-                g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeSpecialWorkspace, NOW);
+            if (g_pSeatPresentation->activeFor(mon)) {
+                const auto workspace = g_pSeatPresentation->workspace();
+                g_pHyprRenderer->sendFrameEventsToWorkspace(mon, workspace, NOW);
+            } else {
+                if (m_activeWorkspace)
+                    g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeWorkspace, NOW);
+                if (m_activeSpecialWorkspace)
+                    g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeSpecialWorkspace, NOW);
+            }
         }
 
         m_frameScheduler->onPresented();

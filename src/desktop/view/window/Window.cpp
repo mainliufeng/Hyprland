@@ -1,4 +1,5 @@
 #include "../../../managers/SeatDesktop.hpp"
+#include "../../../managers/SeatPresentation.hpp"
 #include "../../../protocols/core/Seat.hpp"
 #include "../../../managers/SeatManager.hpp"
 #include <algorithm>
@@ -1800,7 +1801,7 @@ void CWindow::commitWindow(bool initialCommit) {
             g_pHyprRenderer->damageWindow(m_self.lock());
     }
 
-    if (!m_workspace->visible())
+    if (!m_workspace->visible() && !(g_pSeatPresentation->active() && g_pSeatPresentation->workspace() == m_workspace))
         return;
 
     const auto PMONITOR = m_monitor.lock();

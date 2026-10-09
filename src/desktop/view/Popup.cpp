@@ -1,3 +1,4 @@
+#include "../../managers/SeatPresentation.hpp"
 #include "../../managers/SeatDesktop.hpp"
 #include "Popup.hpp"
 #include "Subsurface.hpp"
@@ -324,7 +325,9 @@ void CPopup::onCommit(bool ignoreSiblings) {
     }
 
     if (!m_windowOwner.expired() &&
-        (!m_windowOwner->mapped() || (!m_windowOwner->m_workspace->visible() && !(g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->usesWorkspace(m_windowOwner->m_workspace))))) {
+        (!m_windowOwner->mapped() ||
+         (!m_windowOwner->m_workspace->visible() && !(g_pSeatDesktopRegistry && g_pSeatDesktopRegistry->usesWorkspace(m_windowOwner->m_workspace)) &&
+          !(g_pSeatPresentation->active() && g_pSeatPresentation->workspace() == m_windowOwner->m_workspace)))) {
         const auto PREV_SIZE = m_lastSize;
         m_lastSize           = m_backend->surfaceSize();
 

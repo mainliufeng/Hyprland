@@ -3,6 +3,7 @@
 #include <vector>
 #include <unordered_map>
 #include "WaylandProtocol.hpp"
+#include "../desktop/DesktopTypes.hpp"
 #include "fifo-v1.hpp"
 
 #include "../helpers/signal/Signal.hpp"
@@ -15,11 +16,13 @@ class CFifoResource {
     ~CFifoResource();
 
     bool good();
+    void renderedOn(PHLMONITOR monitor);
 
   private:
     UP<CWpFifoV1>          m_resource;
 
     WP<CWLSurfaceResource> m_surface;
+    PHLMONITORREF          m_renderedMonitor;
 
     struct {
         CHyprSignalListener surfaceStateCommit;

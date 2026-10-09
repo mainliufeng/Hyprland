@@ -1,3 +1,4 @@
+#include "../../managers/SeatPresentation.hpp"
 #include "Subsurface.hpp"
 #include "../state/FocusState.hpp"
 #include "window/Window.hpp"
@@ -213,7 +214,9 @@ void CSubsurface::recheckDamageForSubsurfaces(int depth) {
 
 void CSubsurface::onCommit() {
     // no damaging if it's not visible
-    if (!m_windowParent.expired() && (!m_windowParent->mapped() || !m_windowParent->m_workspace->visible())) {
+    if (!m_windowParent.expired() &&
+        (!m_windowParent->mapped() ||
+         (!m_windowParent->m_workspace->visible() && !(g_pSeatPresentation->active() && g_pSeatPresentation->workspace() == m_windowParent->m_workspace)))) {
         m_lastSize = m_wlSurface->resource()->m_current.size;
 
         static auto PLOGDAMAGE = CConfigValue<Config::INTEGER>("debug:log_damage");

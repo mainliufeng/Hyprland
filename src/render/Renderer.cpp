@@ -2307,7 +2307,8 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = !g_pSeatPresentation->activeFor(pMonitor) && pMonitor->canAttemptDirectScanoutFast();
+    const bool presentationSource      = g_pSeatPresentation->active() && g_pSeatPresentation->workspace()->m_monitor == pMonitor;
+    const bool canAttemptDirectScanout = !g_pSeatPresentation->activeFor(pMonitor) && !presentationSource && pMonitor->canAttemptDirectScanoutFast();
     const auto presentationMode =
         shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE : Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC;
     if (pMonitor->m_output->state->state().presentationMode != presentationMode)
@@ -2438,7 +2439,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         }
     } else if (g_pSeatPresentation->activeFor(pMonitor)) {
         const auto workspace = g_pSeatPresentation->workspace();
-        sendFrameEventsToWorkspace(workspace->m_monitor.lock(), workspace, NOW);
+        sendFrameEventsToWorkspace(pMonitor, workspace, NOW);
     } else if (!pMonitor->isMirror()) {
         if (pMonitor->m_activeWorkspace)
             sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
@@ -2778,6 +2779,8 @@ void IHyprRenderer::renderWorkspace(CRenderContext& ctx, PHLWORKSPACE workspace,
 }
 
 void IHyprRenderer::sendFrameEventsToWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now) {
+    if (g_pSeatPresentation->active() && pWorkspace == g_pSeatPresentation->workspace() && pMonitor != g_pSeatPresentation->output())
+        return;
     for (const auto& view : Desktop::View::getViewsForWorkspace(pWorkspace)) {
         if (!view->mapped() || !view->acceptsInput() || !view->resource())
             continue;

@@ -8,6 +8,7 @@
 #include "../desktop/view/View.hpp"
 #include "../desktop/view/types/AlphaModifiable.hpp"
 #include "../render/Renderer.hpp"
+#include "../managers/SeatPresentation.hpp"
 #include <algorithm>
 #include <hyprutils/memory/WeakPtr.hpp>
 
@@ -118,6 +119,10 @@ CFifoResource::CFifoResource(UP<CWpFifoV1>&& resource_, SP<CWLSurfaceResource> s
 
 CFifoResource::~CFifoResource() {
     ;
+}
+
+void CFifoResource::renderedOn(PHLMONITOR monitor) {
+    m_renderedMonitor = monitor;
 }
 
 bool CFifoResource::good() {
@@ -246,6 +251,15 @@ void CFifoProtocol::onMonitorPresent(PHLMONITOR m) {
             fifo->presented();
             continue;
         }
+
+        // A presented agent surface retains its private wl_output membership.
+        // Only the output that rendered it may release its presentation barrier.
+        if (fifo->m_renderedMonitor && g_pSeatPresentation->activeFor(fifo->m_renderedMonitor.lock())) {
+            if (fifo->m_renderedMonitor == m)
+                fifo->presented();
+            continue;
+        }
+        fifo->m_renderedMonitor.reset();
 
         auto it = std::ranges::find_if(fifo->m_surface->m_enteredOutputs, [m](auto& mon) { return mon == m; });
         if (it != fifo->m_surface->m_enteredOutputs.end()) {

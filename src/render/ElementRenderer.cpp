@@ -1,6 +1,7 @@
 #include "ElementRenderer.hpp"
 #include "SceneResources.hpp"
 #include "Renderer.hpp"
+#include "../protocols/Fifo.hpp"
 #include "../layout/LayoutManager.hpp"
 #include "../desktop/view/window/Window.hpp"
 #include "../desktop/view/window/WindowEffectsController.hpp"
@@ -428,8 +429,14 @@ void IElementRenderer::drawSurface(CRenderContext& ctx, WP<CSurfacePassElement> 
 
     g_pHyprRenderer->blend(true);
 
-    if (!ctx.m_blockSurfaceFeedback)
-        element->m_data.surface->presentFeedback(element->m_data.when, element->m_data.pMonitor->m_self.lock());
+    if (element->ownsFrameFeedback(ctx)) {
+        // Geometry can belong to a private output while the pass is drawn on a
+        // physical output. Frame pacing must follow the output actually drawn.
+        const auto output = ctx.m_data.pMonitor->m_self.lock();
+        if (element->m_data.surface->m_fifo)
+            element->m_data.surface->m_fifo->renderedOn(output != element->m_data.pMonitor->m_self.lock() ? output : nullptr);
+        element->m_data.surface->presentFeedback(element->m_data.when, output);
+    }
 };
 
 void IElementRenderer::preDrawSurface(CRenderContext& ctx, WP<CSurfacePassElement> element, const CRegion& damage) {
