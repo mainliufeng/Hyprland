@@ -46,6 +46,7 @@ namespace Keybinds {
         // Optional managed binding scope. Empty keeps the existing config semantics.
         std::string seatIdentity;
         std::string controller;
+        bool        physicalOnly      = false;
         bool        viewOnly          = false;
         bool        overrideInherited = false;
     };

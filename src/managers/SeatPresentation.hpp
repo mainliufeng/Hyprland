@@ -30,26 +30,29 @@ class CSeatPresentation {
     const std::string& owner() const;
     bool               controlling() const;
     bool               overlay() const;
-    bool               draw(Render::CRenderContext& ctx, PHLMONITOR output, const Time::steady_tp& now);
-    bool               motion(const IPointer::SMotionEvent& event, const Vector2D& delta);
-    bool               absolute(const IPointer::SMotionAbsoluteEvent& event);
-    bool               button(const IPointer::SButtonEvent& event);
-    bool               axis(const IPointer::SAxisEvent& event);
-    bool               key(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard);
-    bool               modifiers(SP<IKeyboard> keyboard);
-    bool               frame();
+    uint64_t           viewEpoch() const {
+        return m_viewEpoch;
+    }
+    bool keyboardOverlay() const;
+    bool draw(Render::CRenderContext& ctx, PHLMONITOR output, const Time::steady_tp& now);
+    bool motion(const IPointer::SMotionEvent& event, const Vector2D& delta);
+    bool absolute(const IPointer::SMotionAbsoluteEvent& event);
+    bool button(const IPointer::SButtonEvent& event);
+    bool axis(const IPointer::SAxisEvent& event);
+    bool key(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard);
+    bool modifiers(SP<IKeyboard> keyboard);
+    bool frame();
 
   private:
     void                     pointerMotion(uint32_t time);
     bool                     overlayFocus(uint32_t time);
-    bool                     keyboardOverlay() const;
     Vector2D                 scenePoint(const Vector2D& position) const;
     std::string              m_name, m_identity, m_owner;
     PHLMONITORREF            m_output;
     PHLWORKSPACE             m_workspace;
     Vector2D                 m_savedCursor, m_cursor;
     Time::steady_tp          m_heartbeat;
-    uint64_t                 m_generation = 0, m_frames = 0;
+    uint64_t                 m_generation = 0, m_frames = 0, m_viewEpoch = 0;
     bool                     m_control = false, m_overlay = false;
     std::vector<uint32_t>    m_overlayKeys;
     std::map<uint32_t, bool> m_buttonOwners;

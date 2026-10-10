@@ -12,6 +12,8 @@ namespace SeatConfig {
     struct SBinding {
         std::vector<std::string> keys;
         std::string              action, argument;
+        bool                     physicalOnly      = false;
+        bool                     release           = false;
         bool                     viewOnly          = false;
         bool                     overrideInherited = false;
     };

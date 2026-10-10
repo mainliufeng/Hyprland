@@ -4,10 +4,9 @@
 #include "core/Compositor.hpp"
 
 void CTextInputV3::SState::reset() {
-    cause               = ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_INPUT_METHOD;
-    surrounding.updated = false;
-    contentType.updated = false;
-    box.updated         = false;
+    // enable starts a new editor context, including when the previous
+    // context was enabled and the client did not first commit disable.
+    *this = SState{};
 }
 
 CTextInputV3::CTextInputV3(SP<CZwpTextInputV3> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
@@ -22,6 +21,13 @@ CTextInputV3::CTextInputV3(SP<CZwpTextInputV3> resource_, SP<CWLSeatResource> se
     m_resource->setCommit([this](CZwpTextInputV3* r) {
         bool wasEnabled = m_current.enabled.value;
 
+        // A monotonic revision also detects editor movement followed by a
+        // return to the same text/caret between external observations.
+        if (m_pending.enabled.isEnablePending || m_pending.enabled.isDisablePending || m_current.surrounding.text != m_pending.surrounding.text ||
+            m_current.surrounding.cursor != m_pending.surrounding.cursor || m_current.surrounding.anchor != m_pending.surrounding.anchor ||
+            m_current.contentType.hint != m_pending.contentType.hint || m_current.contentType.purpose != m_pending.contentType.purpose ||
+            m_current.box.cursorBox != m_pending.box.cursorBox)
+            markEditorChanged();
         m_current = m_pending;
         m_serial++;
 
@@ -29,7 +35,7 @@ CTextInputV3::CTextInputV3(SP<CZwpTextInputV3> resource_, SP<CWLSeatResource> se
             m_events.disable.emit();
         else if (!wasEnabled && m_current.enabled.value)
             m_events.enable.emit();
-        else if (m_current.enabled.value && m_current.enabled.isEnablePending && m_current.enabled.isDisablePending)
+        else if (m_current.enabled.value && m_current.enabled.isEnablePending)
             m_events.reset.emit();
         else
             m_events.onCommit.emit();
@@ -141,4 +147,9 @@ void CTextInputV3Protocol::onGetTextInput(CZwpTextInputManagerV3* pMgr, uint32_t
 }
 CSeatManager* CTextInputV3::manager() const {
     return m_seat->manager();
+}
+
+void CTextInputV3::markEditorChanged() {
+    static uint64_t nextEditorEpoch = 0;
+    m_editorEpoch                   = ++nextEditorEpoch;
 }

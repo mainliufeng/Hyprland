@@ -8,6 +8,7 @@
 #include "../../managers/SeatDesktop.hpp"
 #include "../../protocols/core/Seat.hpp"
 #include "Commands.hpp"
+#include <glaze/glaze.hpp>
 #include "../../managers/SeatConfiguration.hpp"
 #include "../../desktop/view/window/WindowFullscreenPolicy.hpp"
 #include "../../desktop/view/window/WindowGroupMembership.hpp"
@@ -2004,10 +2005,12 @@ static void ensurePrimaryInputFocusListener() {
 }
 
 struct SHumanInputTarget {
-    CSeatManager* manager = nullptr;
-    PHLWINDOW     window;
-    std::string   seatName = HL_SEAT_NAME;
-    std::string   token, reason;
+    CSeatManager*                           manager = nullptr;
+    PHLWINDOW                               window;
+    PHLLS                                   layer;
+    std::optional<CTextInput::SEditorState> editor;
+    std::string                             seatName = HL_SEAT_NAME;
+    std::string                             token, reason;
 };
 
 static bool windowOwnsInputSurface(PHLWINDOW window, SP<CWLSurfaceResource> focused) {
@@ -2030,7 +2033,7 @@ static bool windowOwnsInputSurface(PHLWINDOW window, SP<CWLSurfaceResource> focu
     return owns;
 }
 
-static SHumanInputTarget humanInputTarget() {
+static SHumanInputTarget humanInputTarget(bool localEditor = false) {
     ensurePrimaryInputFocusListener();
     SHumanInputTarget target;
     if (g_pSessionLockManager->isSessionLocked()) {
@@ -2038,6 +2041,29 @@ static SHumanInputTarget humanInputTarget() {
         return target;
     }
     g_pSeatPresentation->validate();
+    // A registered local editor belongs to the physical seat, even while
+    // another seat is observed. Never grant input to the observed application.
+    const auto focused  = g_pSeatManager->m_state.keyboardFocus.lock();
+    const auto surface  = focused ? Desktop::View::CWLSurface::fromResource(focused) : nullptr;
+    const auto layer    = surface ? Desktop::View::CLayerSurface::fromView(surface->view()) : nullptr;
+    const auto identity = g_pSeatPresentation->active() ? g_pSeatPresentation->seat()->socketName() : "";
+    if (localEditor && layer && layer->mapped() && !layer->seatDesktop() && SeatConfig::manager()->overlay(layer, identity, true)) {
+        const auto input = g_pInputManager->m_relay.getFocusedTextInput();
+        if (input && input->focusedSurface() == focused)
+            target.editor = input->editorState();
+        if (!target.editor || target.editor->protectedField) {
+            target.reason = "local editor is unavailable or protected";
+            return target;
+        }
+        target.layer   = layer;
+        target.manager = g_pSeatManager.get();
+        target.token   = primaryInputFocusToken() + ":" + std::to_string(target.editor->revision);
+        if (g_pSeatPresentation->active())
+            target.token += ":" + identity + ":" + std::to_string(g_pSeatPresentation->seat()->controlGeneration()) + ":" + std::to_string(g_pSeatPresentation->viewEpoch());
+        if (!target.manager->m_keyboard || !target.manager->m_state.keyboardFocusResource)
+            target.reason = "local editor keyboard is unavailable";
+        return target;
+    }
     if (g_pSeatPresentation->active()) {
         if (!g_pSeatPresentation->controlling()) {
             target.reason = "desktop is read only";
@@ -2077,18 +2103,27 @@ static SHumanInputTarget humanInputTarget() {
     return target;
 }
 
-static std::string humanInputTargetJSON() {
-    const auto target  = humanInputTarget();
+static std::string humanInputTargetJSON(bool localEditor = false) {
+    const auto target  = humanInputTarget(localEditor);
     const auto allowed = target.reason.empty();
-    auto       window  = allowed ? CCommandFormatter::getWindowData(target.window, FORMAT_JSON) : "{}";
+    if (allowed && target.layer) {
+        const auto& editor = *target.editor;
+        const auto  text   = glz::write_json(editor.text).value_or("null");
+        return std::format(
+            "{{\"allowed\":true,\"reason\":\"\",\"kind\":\"local-editor\",\"token\":\"{}\",\"seatName\":\"{}\",\"pid\":{},"
+            "\"namespace\":\"{}\",\"surfaceId\":\"{:x}\",\"editor\":{{\"text\":{},\"cursor\":{},\"anchor\":{},\"revision\":{},\"protected\":false,\"surroundingAvailable\":{}}}}}",
+            escapeJSONStrings(target.token), escapeJSONStrings(target.seatName), target.layer->getPID(), escapeJSONStrings(target.layer->m_namespace),
+            rc<uintptr_t>(target.layer->resource().get()), text, editor.cursor, editor.anchor, editor.revision, editor.surroundingAvailable);
+    }
+    auto window = allowed ? CCommandFormatter::getWindowData(target.window, FORMAT_JSON) : "{}";
     if (allowed)
         window.pop_back(); // The shared list formatter appends a comma.
     return std::format("{{\"allowed\":{},\"reason\":\"{}\",\"token\":\"{}\",\"seatName\":\"{}\",\"window\":{}}}", allowed, escapeJSONStrings(target.reason),
                        allowed ? escapeJSONStrings(target.token) : "", escapeJSONStrings(target.seatName), window);
 }
 
-static std::string humanInputShortcut(const std::string& token, const std::string& mods, const std::string& key) {
-    const auto target = humanInputTarget();
+static std::string humanInputShortcut(const std::string& token, const std::string& mods, const std::string& key, bool localEditor = false) {
+    const auto target = humanInputTarget(localEditor);
     if (!target.reason.empty())
         return "input target unavailable: " + target.reason;
     if (token != target.token)
@@ -2227,6 +2262,10 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
         return SeatConfig::manager()->ensureWorkspace(args[2], args[3], args[4]);
     if (args.size() >= 3 && args[2] == "main")
         return primaryDesktopRequest(format, args);
+    if (args.size() == 2 && args[1] == "input-target-v2")
+        return humanInputTargetJSON(true);
+    if (args.size() == 5 && args[1] == "input-shortcut-v2")
+        return humanInputShortcut(args[2], args[3], args[4], true);
     if (args.size() == 2 && args[1] == "input-target")
         return humanInputTargetJSON();
     if (args.size() == 5 && args[1] == "input-shortcut")
@@ -2245,7 +2284,7 @@ static std::string seatRequest(eHyprCtlOutputFormat format, std::string request)
         return dispatchRequest(format, "dispatch " + request.substr(prefix.size()));
     }
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","physical-input-target-v2","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1"]})";
     if (args.size() == 7 && args[1] == "present")
         return g_pSeatPresentation->show(args[2], args[3], State::monitorState()->query().name(args[4]).run(), args[5], args[6]);
     if (args.size() == 3 && args[1] == "presentation")

@@ -55,6 +55,9 @@ void CTextInput::onEnabled(SP<CWLSurfaceResource> surfV1) {
         return;
     }
 
+    if (isV3() && (!focusedSurface() || focusedSurface() != m_relay->focus()))
+        return;
+
     // v1 only, map surface to PTI
     if (!isV3()) {
         if (m_relay->focus() != surfV1 || !m_v1Input->m_active)
@@ -89,6 +92,8 @@ void CTextInput::onDisabled() {
 }
 
 void CTextInput::onReset() {
+    if (!focusedSurface() || focusedSurface() != m_relay->focus())
+        return;
     if (m_relay->m_inputMethod.expired())
         return;
 
@@ -104,6 +109,8 @@ void CTextInput::onReset() {
 }
 
 void CTextInput::onCommit() {
+    if (!focusedSurface() || focusedSurface() != m_relay->focus())
+        return;
     if (m_relay->m_inputMethod.expired()) {
         //   LOG(Log::WARN,  "Committing TextInput on no IME!");
         return;
@@ -258,10 +265,17 @@ void CTextInput::commitStateToIME(SP<CInputMethodV2> ime) {
 
 void CTextInput::updateIMEState(SP<CInputMethodV2> ime) {
     if (isV3()) {
-        const auto INPUT = m_v3Input.lock();
+        const auto INPUT     = m_v3Input.lock();
+        const bool composing = ime->m_current.preeditString.committed && !ime->m_current.preeditString.string.empty();
+        if (INPUT->m_editorComposing != composing)
+            INPUT->markEditorChanged();
+        INPUT->m_editorComposing = composing;
 
         if (ime->m_current.preeditString.committed)
             INPUT->preeditString(ime->m_current.preeditString.string, ime->m_current.preeditString.begin, ime->m_current.preeditString.end);
+
+        else
+            INPUT->preeditString("", -1, -1);
 
         if (ime->m_current.committedString.committed)
             INPUT->commitString(ime->m_current.committedString.string);
@@ -306,4 +320,16 @@ CBox CTextInput::cursorBox() {
 
 bool CTextInput::isEnabled() {
     return isV3() ? m_v3Input->m_current.enabled.value : true;
+}
+
+std::optional<CTextInput::SEditorState> CTextInput::editorState() {
+    if (!m_v3Input || m_v3Input->m_editorComposing || !isEnabled() || !focusedSurface())
+        return std::nullopt;
+    const auto& state          = m_v3Input->m_current;
+    const bool  protectedField = state.contentType.purpose == ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PASSWORD || state.contentType.purpose == ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PIN ||
+        (state.contentType.hint & (ZWP_TEXT_INPUT_V3_CONTENT_HINT_HIDDEN_TEXT | ZWP_TEXT_INPUT_V3_CONTENT_HINT_SENSITIVE_DATA));
+    if (state.surrounding.text.size() > 65536 || state.surrounding.cursor > state.surrounding.text.size() || state.surrounding.anchor > state.surrounding.text.size())
+        return std::nullopt;
+    return SEditorState{
+        protectedField ? "" : state.surrounding.text, state.surrounding.cursor, state.surrounding.anchor, m_v3Input->m_editorEpoch, protectedField, state.surrounding.updated};
 }

@@ -57,7 +57,7 @@ bool CConfiguration::overlay(const SP<Desktop::View::CLayerSurface>& layer, cons
     if (!layer)
         return false;
     for (const auto& [owner, controller] : m_controllers) {
-        if (!live(owner) || controller.config.seatId != seatId)
+        if (!live(owner) || (!seatId.empty() && controller.config.seatId != seatId))
             continue;
         for (const auto& rule : controller.config.overlays)
             if (rule.pid == layer->getPID() && rule.name == layer->m_namespace && (!keyboard || rule.keyboard) && (!localInView || rule.localInView))
@@ -72,8 +72,12 @@ std::string CConfiguration::configure(const std::string& json) {
     SConfiguration config;
     if (const auto error = glz::read_json(config, json); error)
         return "invalid configuration JSON";
-    auto seat = g_pSeatDesktopRegistry->forName(config.seatName);
-    if (!seat || seat->socketName() != config.seatId || config.owner.size() < 32 || config.owner.size() > 128 || config.bindings.size() > 128 || config.overlays.size() > 128)
+    auto       seat    = g_pSeatDesktopRegistry->forName(config.seatName);
+    const bool primary = config.seatName == "main" && config.seatId == g_pCompositor->m_instanceSignature + "-primary";
+    if (primary && !config.bindings.empty())
+        return "primary overlay configuration cannot replace physical bindings";
+    if ((!primary && (!seat || seat->socketName() != config.seatId)) || config.owner.size() < 32 || config.owner.size() > 128 || config.bindings.size() > 128 ||
+        config.overlays.size() > 128)
         return "invalid configuration identity or limits";
     if (!config.callback.empty() &&
         (config.callback.size() >= sizeof(sockaddr_un::sun_path) ||
@@ -159,16 +163,19 @@ std::string CConfiguration::configure(const std::string& json) {
                                                    .argument          = definition.argument,
                                                    .seatIdentity      = config.seatId,
                                                    .controller        = config.owner,
+                                                   .physicalOnly      = definition.physicalOnly,
                                                    .viewOnly          = definition.viewOnly,
                                                    .overrideInherited = definition.overrideInherited}};
-        auto                     bind = Keybinds::CBind::make(std::vector<std::string>{definition.keys}, 0, std::move(callback), std::move(args));
+        auto bind = Keybinds::CBind::make(std::vector<std::string>{definition.keys}, definition.release ? Keybinds::BIND_FLAG_RELEASE : 0, std::move(callback), std::move(args));
         if (!bind)
             return "invalid binding: " + bind.error();
         for (const auto& existing : definitions)
-            if (existing.metadata().viewOnly == definition.viewOnly && existing.modifierMask() == bind->modifierMask() && std::ranges::equal(existing.keyNames(), bind->keyNames()))
+            if (existing.hasFlag(Keybinds::BIND_FLAG_RELEASE) == definition.release && existing.metadata().viewOnly == definition.viewOnly &&
+                existing.modifierMask() == bind->modifierMask() && std::ranges::equal(existing.keyNames(), bind->keyNames()))
                 return "duplicate binding in configuration: " + display;
         for (const auto& existing : Keybinds::mgr()->registry().binds()) {
-            if (existing->modifierMask() != bind->modifierMask() || existing->keyNames().size() != bind->keyNames().size())
+            if (existing->hasFlag(Keybinds::BIND_FLAG_RELEASE) != definition.release || existing->modifierMask() != bind->modifierMask() ||
+                existing->keyNames().size() != bind->keyNames().size())
                 continue;
             if (!existing->metadata().controller.empty()) {
                 const auto& metadata = existing->metadata();

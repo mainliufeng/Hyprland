@@ -9,10 +9,9 @@
 #include "../../protocols/core/Compositor.hpp"
 
 CInputMethodRelay::CInputMethodRelay(CSeatManager* owner) : m_seat(owner) {
-    if (owner)
-        m_listeners.focus = owner->m_events.keyboardFocusChange.listen([this] { onKeyboardFocus(focus()); });
-    else
-        m_listeners.focus = Event::bus()->m_events.input.keyboard.focus.listen([this](SP<CWLSurfaceResource> surf) { onKeyboardFocus(surf); });
+    // Layer and presentation focus changes use the seat directly. Listening
+    // to its actual focus also keeps the primary IME in sync with these paths.
+    m_listeners.focus = seat()->m_events.keyboardFocusChange.listen([this] { onKeyboardFocus(focus()); });
 
     m_listeners.newTIV3 = PROTO::textInputV3->m_events.newTextInput.listen([this](const auto& input) { onNewTextInput(input); });
     m_listeners.newTIV1 = PROTO::textInputV1->m_events.newTextInput.listen([this](const auto& input) { onNewTextInput(input); });

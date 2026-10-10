@@ -929,12 +929,16 @@ bool CKeybindManager::handleInternalKeybinds(xkb_keysym_t keysym) {
 
 bool CKeybindManager::canInvokeNow(const PBind& bind) const {
     const auto& metadata = bind->metadata();
-    const bool  viewing  = !m_seat && g_pSeatPresentation && g_pSeatPresentation->active() && !g_pSeatPresentation->controlling();
+    if (metadata.physicalOnly && !SeatInput::physical())
+        return false;
+    const bool presented    = !m_seat && g_pSeatPresentation && g_pSeatPresentation->active();
+    const bool localOverlay = presented && g_pSeatPresentation->keyboardOverlay();
+    const bool viewing      = !m_seat && g_pSeatPresentation && g_pSeatPresentation->active() && !g_pSeatPresentation->controlling();
     if (!metadata.controller.empty()) {
-        const auto target = viewing ? g_pSeatPresentation->seat() : m_seat;
+        const auto target = (viewing || localOverlay) ? g_pSeatPresentation->seat() : m_seat;
         if (!target || target->socketName() != metadata.seatIdentity || metadata.viewOnly != viewing || !SeatConfig::manager()->live(metadata.controller))
             return false;
-    } else if (viewing)
+    } else if (viewing || localOverlay)
         return false;
     if (m_seat && !m_seat->inputAllowed())
         return false;

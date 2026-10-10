@@ -92,6 +92,7 @@ std::string CSeatPresentation::show(const std::string& name, const std::string& 
         Pointer::mgr()->unlockSoftwareForMonitor(output());
         Pointer::mgr()->lockSoftwareForMonitor(monitor);
     }
+    ++m_viewEpoch;
     m_name      = name;
     m_identity  = identity;
     m_owner     = owner;
@@ -117,6 +118,7 @@ std::string CSeatPresentation::control(const std::string& owner, bool enabled) {
         return "native presentation control unavailable";
     const auto s = seat();
     if (m_control != enabled) {
+        ++m_viewEpoch;
         s->setPaused(true);
         if (enabled) {
             s->setPaused(false);
@@ -161,6 +163,7 @@ void CSeatPresentation::clear() {
             g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), button, WL_POINTER_BUTTON_STATE_RELEASED);
     m_overlayKeys.clear();
     m_buttonOwners.clear();
+    ++m_viewEpoch;
     const auto previousName = m_name;
     m_control               = false;
     m_overlay               = false;
@@ -303,11 +306,20 @@ bool CSeatPresentation::key(const IKeyboard::SKeyEvent& event, SP<IKeyboard> key
     validate();
     if (!active())
         return false;
+    // Input-method feedback is already processed by the native input path.
+    // Never replay it as a physical shortcut, or deliver it to a hidden app.
+    const auto inputMethod = g_pInputManager->m_relay.m_inputMethod.lock();
+    if (inputMethod && inputMethod->hasGrab() && inputMethod->grabClient() == keyboard->getClient())
+        return !keyboardOverlay();
     if (event.updateMods) {
         keyboard->updateXkbStateWithKey(event.keycode + 8, event.state == WL_KEYBOARD_KEY_STATE_PRESSED);
         keyboard->updateModifiersState();
     }
     if (keyboardOverlay()) {
+        auto routed       = event;
+        routed.updateMods = false;
+        if (!Keybinds::mgr()->onKeyEvent(routed, keyboard))
+            return true;
         if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED && std::ranges::find(m_overlayKeys, event.keycode) == m_overlayKeys.end())
             m_overlayKeys.push_back(event.keycode);
         else if (event.state == WL_KEYBOARD_KEY_STATE_RELEASED)
@@ -345,6 +357,9 @@ bool CSeatPresentation::modifiers(SP<IKeyboard> keyboard) {
     validate();
     if (!active())
         return false;
+    const auto inputMethod = g_pInputManager->m_relay.m_inputMethod.lock();
+    if (inputMethod && inputMethod->hasGrab() && inputMethod->grabClient() == keyboard->getClient())
+        return !keyboardOverlay();
     if (keyboardOverlay()) {
         g_pSeatManager->setKeyboard(keyboard);
         const auto mods = keyboard->m_modifiersState;

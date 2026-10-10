@@ -67,8 +67,11 @@ class CTextInputV3 {
         void                      reset();
     };
 
-    SState m_pending;
-    SState m_current;
+    uint64_t m_editorEpoch     = 0;
+    bool     m_editorComposing = false;
+    void     markEditorChanged();
+    SState   m_pending;
+    SState   m_current;
 
   private:
     SP<CWLSeatResource> m_seat;

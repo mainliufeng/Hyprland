@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../../helpers/math/Math.hpp"
+#include <optional>
+#include <string>
 #include "../../helpers/signal/Signal.hpp"
 #include "../../helpers/memory/Memory.hpp"
 
@@ -17,24 +19,32 @@ class CTextInput {
     CTextInput(WP<CTextInputV3> ti, CInputMethodRelay* relay);
     CTextInput(WP<CTextInputV1> ti, CInputMethodRelay* relay);
 
-    bool                   isV3();
-    void                   enter(SP<CWLSurfaceResource> pSurface);
-    void                   leave();
-    void                   tiV1Destroyed();
-    wl_client*             client();
-    void                   commitStateToIME(SP<CInputMethodV2> ime);
-    void                   updateIMEState(SP<CInputMethodV2> ime);
+    struct SEditorState {
+        std::string text;
+        uint32_t    cursor = 0, anchor = 0;
+        uint64_t    revision             = 0;
+        bool        protectedField       = true;
+        bool        surroundingAvailable = false;
+    };
+    std::optional<SEditorState> editorState();
+    bool                        isV3();
+    void                        enter(SP<CWLSurfaceResource> pSurface);
+    void                        leave();
+    void                        tiV1Destroyed();
+    wl_client*                  client();
+    void                        commitStateToIME(SP<CInputMethodV2> ime);
+    void                        updateIMEState(SP<CInputMethodV2> ime);
 
-    void                   onEnabled(SP<CWLSurfaceResource> surfV1 = nullptr);
-    void                   onDisabled();
-    void                   onCommit();
-    void                   onReset();
+    void                        onEnabled(SP<CWLSurfaceResource> surfV1 = nullptr);
+    void                        onDisabled();
+    void                        onCommit();
+    void                        onReset();
 
-    bool                   isEnabled();
-    bool                   hasCursorRectangle();
-    CBox                   cursorBox();
+    bool                        isEnabled();
+    bool                        hasCursorRectangle();
+    CBox                        cursorBox();
 
-    SP<CWLSurfaceResource> focusedSurface();
+    SP<CWLSurfaceResource>      focusedSurface();
 
   private:
     void                   setFocusedSurface(SP<CWLSurfaceResource> pSurface);
