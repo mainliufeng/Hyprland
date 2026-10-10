@@ -619,6 +619,16 @@ void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface)
     if (!canFocusWindow(window, surface))
         return;
     auto previous = m_window.lock();
+    // A popup/subsurface belongs to the already active toplevel. Moving
+    // keyboard focus within that client must not activate the toplevel again:
+    // clients such as Chrome dismiss their popup on a repeated activation.
+    if (window && previous == window) {
+        // Keep the toplevel's keyboard focus while clicking its popup, as
+        // CFocusState::rawSurfaceFocus does for the primary seat.
+        if (m_manager->m_state.keyboardFocus != window->wlSurface()->resource())
+            m_manager->setKeyboardFocus(surface ? surface : window->wlSurface()->resource());
+        return;
+    }
     m_windowUnmap.reset();
     m_windowDestroy.reset();
     if (previous != window)

@@ -396,7 +396,11 @@ bool CSeatPresentation::draw(Render::CRenderContext& ctx, PHLMONITOR target, con
             for (const auto& popup : s->relay()->popups())
                 if (popup->shouldBeRendered())
                     g_pHyprRenderer->renderIMEPopup(ctx, popup.get(), source, now);
-            s->pointer()->renderSoftwareCursorsFor(ctx, source, now, ctx.m_data.damage, std::nullopt, true, true);
+            // During physical control there is one visible pointer. Crossing
+            // onto a local shell overlay changes its input owner; the seat's
+            // last workspace position must not remain painted underneath.
+            if (!controlling() || !overlay())
+                s->pointer()->renderSoftwareCursorsFor(ctx, source, now, ctx.m_data.damage, std::nullopt, true, true);
         }
         g_pHyprRenderer->addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{Render::SRenderModifData{}}));
         ctx.m_sceneSeat = nullptr;
