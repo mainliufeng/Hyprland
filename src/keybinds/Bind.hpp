@@ -43,6 +43,12 @@ namespace Keybinds {
         std::string                argument;
         std::string                submap;
         std::string                submapReset;
+        // Optional managed binding scope. Empty keeps the existing config semantics.
+        std::string seatIdentity;
+        std::string controller;
+        bool        physicalOnly      = false;
+        bool        viewOnly          = false;
+        bool        overrideInherited = false;
     };
 
     struct SExtraBindArgs {

@@ -1,3 +1,4 @@
+#include "core/Seat.hpp"
 #include "CursorShape.hpp"
 #include <algorithm>
 #include "../helpers/CursorShapes.hpp"
@@ -11,7 +12,12 @@ void CCursorShapeProtocol::onManagerResourceDestroy(wl_resource* res) {
 }
 
 void CCursorShapeProtocol::onDeviceResourceDestroy(wl_resource* res) {
-    std::erase_if(m_devices, [res](const auto& other) { return other->resource() == res; });
+    std::erase_if(m_devices, [this, res](const auto& other) {
+        if (other->resource() != res)
+            return false;
+        m_pointers.erase(other.get());
+        return true;
+    });
 }
 
 void CCursorShapeProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
@@ -25,6 +31,8 @@ void CCursorShapeProtocol::bindManager(wl_client* client, void* data, uint32_t v
 
 void CCursorShapeProtocol::onGetPointer(CWpCursorShapeManagerV1* pMgr, uint32_t id, wl_resource* pointer) {
     createCursorShapeDevice(pMgr, id, pointer);
+    if (!m_devices.empty())
+        m_pointers[m_devices.back().get()] = CWLPointerResource::fromResource(pointer);
 }
 
 void CCursorShapeProtocol::onGetTabletToolV2(CWpCursorShapeManagerV1* pMgr, uint32_t id, wl_resource* tablet) {
@@ -47,7 +55,14 @@ void CCursorShapeProtocol::onSetShape(CWpCursorShapeDeviceV1* pMgr, uint32_t ser
     }
 
     SSetShapeEvent event;
-    event.pMgr      = pMgr;
+    event.pMgr   = pMgr;
+    event.serial = serial;
+    if (const auto found = m_pointers.find(pMgr); found != m_pointers.end()) {
+        if (!found->second || !found->second->m_owner)
+            return;
+        event.resource = found->second->m_owner.lock();
+        event.seat     = event.resource->manager();
+    }
     event.shape     = shape;
     event.shapeName = CURSOR_SHAPE_NAMES.at(shape);
 

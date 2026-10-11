@@ -1,4 +1,6 @@
+#include "../managers/SeatDesktop.hpp"
 #include "PointerWarp.hpp"
+#include "PointerConstraints.hpp"
 #include "core/Compositor.hpp"
 #include "core/Seat.hpp"
 #include "../desktop/view/WLSurface.hpp"
@@ -27,7 +29,12 @@ void CPointerWarpProtocol::bindManager(wl_client* client, void* data, uint32_t v
 
     RESOURCE->setWarpPointer([](CWpPointerWarpV1* pMgr, wl_resource* surface, wl_resource* pointer, wl_fixed_t x, wl_fixed_t y, uint32_t serial) {
         const auto PSURFACE = CWLSurfaceResource::fromResource(surface);
-        if (g_pSeatManager->m_state.pointerFocus != PSURFACE)
+        const auto POINTER  = CWLPointerResource::fromResource(pointer);
+        if (!POINTER || !POINTER->m_owner)
+            return;
+        const auto PSEAT   = POINTER->m_owner.lock();
+        const auto MANAGER = PSEAT->manager();
+        if (MANAGER->m_state.pointerFocus != PSURFACE)
             return;
 
         CBox surfbox;
@@ -61,21 +68,28 @@ void CPointerWarpProtocol::bindManager(wl_client* client, void* data, uint32_t v
         if (!surfbox.containsPoint(GLOBALPOS))
             return;
 
-        const auto POINTER = CWLPointerResource::fromResource(pointer);
-        if UNLIKELY (!POINTER) {
-            LOG(Log::ERR, "pointer_warp received an invalid pointer resource");
-            return;
-        }
-
-        const auto PSEAT = POINTER->m_owner.lock();
-        if (!g_pSeatManager->serialValid(PSEAT, serial, false))
+        if (!MANAGER->serialValid(PSEAT, serial, false))
             return;
 
         LOG(Log::DEBUG, "warped pointer to {}", GLOBALPOS);
 
-        Pointer::mgr()->warpTo(GLOBALPOS);
-        g_pSeatManager->sendPointerMotion(Time::millis(Time::steadyNow()), LOCALPOS);
-        g_pSeatManager->sendPointerFrame();
+        if (auto desktop = MANAGER->m_desktop) {
+            if (!desktop->inputAllowed())
+                return;
+            auto position = GLOBALPOS;
+            if (const auto constraint = HLSURF->constraint(MANAGER); constraint && constraint->isActive()) {
+                if (constraint->isLocked())
+                    return;
+                position = constraint->logicConstraintRegion().closestPoint(position);
+            }
+            desktop->pointer()->warpTo(position);
+            desktop->refocus();
+            MANAGER->sendPointerFrame();
+            return;
+        } else
+            Pointer::mgr()->warpTo(GLOBALPOS);
+        MANAGER->sendPointerMotion(Time::millis(Time::steadyNow()), LOCALPOS);
+        MANAGER->sendPointerFrame();
     });
 }
 

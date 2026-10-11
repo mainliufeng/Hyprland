@@ -7,9 +7,17 @@
 #include "../desktop/state/FocusState.hpp"
 #include "../desktop/view/SessionLock.hpp"
 #include "../managers/SeatManager.hpp"
+#include "SeatDesktop.hpp"
+#include "screenshare/ScreenshareManager.hpp"
 #include "../managers/input/InputManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../state/MonitorState.hpp"
+#include "../layout/LayoutManager.hpp"
+#include "../layout/supplementary/DragController.hpp"
+#include "../protocols/core/DataDevice.hpp"
+#include "input/UnifiedWorkspaceSwipeGesture.hpp"
+#include "../ipc/s2/S2.hpp"
+#include "../event/EventBus.hpp"
 #include <algorithm>
 #include <ranges>
 
@@ -47,22 +55,46 @@ SSessionLockSurface::SSessionLockSurface(SP<CSessionLockSurface> surface_) : sur
 
 CSessionLockManager::CSessionLockManager() {
     m_listeners.newLock = PROTO::sessionLock->m_events.newLock.listen([this](const auto& lock) { this->onNewSessionLock(lock); });
+    m_outputListeners.emplace_back(Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR monitor) {
+        watchOutput(monitor);
+        if (isSessionLocked() && protectsOutput(monitor))
+            invalidateOutputs();
+    }));
+    m_outputListeners.emplace_back(Event::bus()->m_events.monitor.removed.listen([this](PHLMONITOR monitor) {
+        if (isSessionLocked() && protectsOutput(monitor))
+            invalidateOutputs();
+    }));
 }
 
 void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     static auto PALLOWRELOCK = CConfigValue<Config::INTEGER>("misc:allow_session_lock_restore");
 
-    if (PROTO::sessionLock->isLocked() && !*PALLOWRELOCK && g_pCompositor->m_startLockedCommand.empty()) {
+    const bool  upgrading = PROTO::sessionLock->isLocked() && m_scoped && !pLock->scoped();
+    if (PROTO::sessionLock->isLocked() && ((!m_scoped && pLock->scoped()) || (m_scoped && m_sessionLock && !upgrading))) {
+        pLock->sendDenied();
+        return;
+    }
+    // Scoped protection may always be upgraded to a complete session lock.
+    // Ordinary lock replacement retains the existing configured restore policy,
+    // including an owner that disconnected without unlocking.
+    if (PROTO::sessionLock->isLocked() && !upgrading && !*PALLOWRELOCK && g_pCompositor->m_startLockedCommand.empty()) {
         LOG(Log::DEBUG, "Cannot re-lock, misc:allow_session_lock_restore is disabled");
         pLock->sendDenied();
         return;
     }
 
-    if (m_sessionLock && !clientDenied() && !clientLocked())
+    if (!upgrading && m_sessionLock && !clientDenied() && !clientLocked())
         return; // Not allowing to relock in case the old lock is still in a limbo
 
     LOG(Log::DEBUG, "Session got locked by {:x}", (uintptr_t)pLock.get());
 
+    if (m_sessionLock && m_sessionLock->lock && m_sessionLock->lock != pLock)
+        m_sessionLock->lock->sendDenied();
+    m_scoped = pLock->scoped();
+    advanceLockEpoch();
+    m_renderedLocks.clear();
+    m_presentedLocks.clear();
+    m_lockId            = m_lockEpoch;
     m_sessionLock       = makeUnique<SSessionLock>();
     m_sessionLock->lock = pLock;
     m_sessionLock->lockTimer.reset();
@@ -78,6 +110,8 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     });
 
     m_sessionLock->listeners.unlock = pLock->m_events.unlockAndDestroy.listen([this] {
+        advanceLockEpoch();
+        m_scoped = false;
         m_events.unlock.emit();
 
         m_sessionLock.reset();
@@ -88,6 +122,10 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
     });
 
     m_sessionLock->listeners.destroy = pLock->m_events.destroyed.listen([this] {
+        if (m_scoped) {
+            abandonToFullLock();
+            return;
+        }
         m_sessionLock.reset();
         Desktop::focusState()->rawSurfaceFocus(nullptr);
 
@@ -95,12 +133,28 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
             g_pHyprRenderer->damageMonitor(m);
     });
 
+    // End physical grabs and held pointer/touch actions before routing to the
+    // lock owner. Independent seat managers are handled by lock listeners.
+    g_pSeatManager->setGrab(nullptr);
+    g_layoutManager->dragController()->dragEnd();
+    PROTO::data->abortDndIfPresent(g_pSeatManager.get());
+    g_pInputManager->releaseAllMouseButtons();
+    g_pSeatManager->setPointerFocus(nullptr, {});
+    g_pSeatManager->sendTouchCancel();
+    g_pInputManager->m_touchData.touchFocusSurface.reset();
+    g_pInputManager->m_touchData.touchFocusWindow.reset();
+    g_pInputManager->m_touchData.touchFocusLS.reset();
+    g_pInputManager->m_touchData.touchFocusLockSurface.reset();
+    if (g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress())
+        g_pUnifiedWorkspaceSwipe->cancel();
+    g_pInputManager->m_touchData.workspaceSwipe.reset();
+    IPC::Socket2::sock()->postEvent({"sessionlock", "locked"});
     m_events.lock.emit();
 
     Desktop::focusState()->rawSurfaceFocus(nullptr);
     g_pSeatManager->setGrab(nullptr);
 
-    const bool NOACTIVEMONS = std::ranges::all_of(State::monitorState()->monitors(), [](const auto& m) { return !m->m_enabled || !m->m_dpmsStatus; });
+    const bool NOACTIVEMONS = std::ranges::all_of(State::monitorState()->monitors(), [this](const auto& m) { return !protectsOutput(m) || !m->m_enabled || confirmedOff(m); });
 
     if (NOACTIVEMONS) {
         // Normally the locked event is sent after each output rendered a lock screen frame.
@@ -110,26 +164,9 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
         return;
     }
 
-    m_sessionLock->sendLockedTimer = makeShared<CEventLoopTimer>(
-        // Clients get sent the "locked" event after they submitted a lock frame for each output.
-        // If they fail to do this, we send the "locked" event after a fixed amount of time here.
-        // Previously we sent denied after this timeout, but that forcefully makes the client exit and the protocol doesn't require that anyways.
-        std::chrono::seconds(5),
-        [](auto, auto) {
-            if (!g_pSessionLockManager || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
-                return;
-
-            if (!g_pSessionLockManager->m_sessionLock || !g_pSessionLockManager->m_sessionLock->lock)
-                return;
-
-            LOG(Log::WARN,
-                "Sending locked after a 5 second timeout. This happens when we failed to render a lock frame from the client for every output. Lockdead frames may be shown.");
-            g_pSessionLockManager->m_sessionLock->lock->sendLocked();
-            g_pSessionLockManager->m_sessionLock->hasSentLocked = true;
-        },
-        nullptr);
-
-    g_pEventLoopManager->addTimer(m_sessionLock->sendLockedTimer);
+    for (const auto& monitor : State::monitorState()->monitors())
+        g_pHyprRenderer->damageMonitor(monitor);
+    // secure is confirmed by actual presentation, never by a timeout.
 }
 
 void CSessionLockManager::removeSendLockedTimer() {
@@ -161,12 +198,26 @@ WP<SSessionLockSurface> CSessionLockManager::getSessionLockSurfaceForMonitor(uin
 }
 
 void CSessionLockManager::onLockscreenRenderedOnMonitor(uint64_t id) {
+    if (isSessionLocked())
+        m_renderedLocks[id] = m_lockEpoch;
+}
+
+uint64_t CSessionLockManager::takeRenderedLock(uint64_t id) {
+    const auto it = m_renderedLocks.find(id);
+    if (it == m_renderedLocks.end())
+        return 0;
+    const auto epoch = it->second;
+    m_renderedLocks.erase(it);
+    return epoch;
+}
+
+void CSessionLockManager::onLockscreenPresented(uint64_t id, uint64_t epoch) {
+    if (!isSessionLocked() || epoch != m_lockEpoch)
+        return;
+    m_presentedLocks[id] = epoch;
     if (!m_sessionLock || m_sessionLock->hasSentLocked || m_sessionLock->hasSentDenied)
         return;
-
-    m_sessionLock->lockedMonitors.emplace(id);
-    const bool LOCKED =
-        std::ranges::all_of(State::monitorState()->monitors(), [this](auto m) { return !m->m_enabled || !m->m_dpmsStatus || m_sessionLock->lockedMonitors.contains(m->m_id); });
+    const bool LOCKED = outputsSecure();
 
     if (LOCKED && m_sessionLock->lock->good()) {
         removeSendLockedTimer();
@@ -221,6 +272,8 @@ bool CSessionLockManager::clientDenied() {
 }
 
 void CSessionLockManager::clearSessionLock() {
+    advanceLockEpoch();
+    m_scoped = false;
     m_events.unlock.emit();
     m_sessionLock = {};
 }
@@ -236,7 +289,39 @@ void CSessionLockManager::forceUnlock() {
     g_pInputManager->refocus();
 }
 
+void CSessionLockManager::abandonToFullLock() {
+    m_sessionLock.reset();
+    m_scoped = false;
+    advanceLockEpoch();
+    m_lockId = m_lockEpoch;
+    m_renderedLocks.clear();
+    m_presentedLocks.clear();
+    PROTO::sessionLock->abandonForFullLock();
+    m_events.lock.emit();
+    // End physical grabs and held pointer/touch actions before routing to the
+    // lock owner. Independent seat managers are handled by lock listeners.
+    g_pSeatManager->setGrab(nullptr);
+    g_layoutManager->dragController()->dragEnd();
+    PROTO::data->abortDndIfPresent(g_pSeatManager.get());
+    g_pInputManager->releaseAllMouseButtons();
+    g_pSeatManager->setPointerFocus(nullptr, {});
+    g_pSeatManager->sendTouchCancel();
+    g_pInputManager->m_touchData.touchFocusSurface.reset();
+    g_pInputManager->m_touchData.touchFocusWindow.reset();
+    g_pInputManager->m_touchData.touchFocusLS.reset();
+    g_pInputManager->m_touchData.touchFocusLockSurface.reset();
+    if (g_pUnifiedWorkspaceSwipe && g_pUnifiedWorkspaceSwipe->isGestureInProgress())
+        g_pUnifiedWorkspaceSwipe->cancel();
+    g_pInputManager->m_touchData.workspaceSwipe.reset();
+    IPC::Socket2::sock()->postEvent({"sessionlock", "locked"});
+    Desktop::focusState()->rawSurfaceFocus(nullptr);
+    for (const auto& monitor : State::monitorState()->monitors())
+        g_pHyprRenderer->damageMonitor(monitor);
+}
+
 void CSessionLockManager::forceLock() {
+    m_scoped = false;
+    advanceLockEpoch();
     PROTO::sessionLock->forceLock();
     m_events.lock.emit();
 }
@@ -248,4 +333,85 @@ bool CSessionLockManager::shallConsiderLockMissing() {
     static auto LOCKDEAD_SCREEN_DELAY = CConfigValue<Config::INTEGER>("misc:lockdead_screen_delay");
 
     return m_sessionLock->lockTimer.getMillis() > *LOCKDEAD_SCREEN_DELAY;
+}
+
+bool CSessionLockManager::scoped() const {
+    return m_scoped;
+}
+uint64_t CSessionLockManager::lockEpoch() const {
+    return m_lockEpoch;
+}
+bool CSessionLockManager::protectsOutput(PHLMONITOR monitor) const {
+    return !m_scoped || !m_sessionLock || !m_sessionLock->lock || !m_sessionLock->lock->excludesOutput(monitor);
+}
+bool CSessionLockManager::allowsSeatInput(const CSeatDesktop* seat) const {
+    return m_scoped && m_sessionLock && m_sessionLock->lock && m_sessionLock->lock->allowsSeatInput(seat);
+}
+
+void CSessionLockManager::watchOutput(PHLMONITOR monitor) {
+    m_outputListeners.emplace_back(monitor->m_events.modeChanged.listen([this, output = PHLMONITORREF{monitor}] {
+        if (output && isSessionLocked() && protectsOutput(output.lock()))
+            invalidateOutputs();
+    }));
+}
+void CSessionLockManager::advanceLockEpoch() {
+    ++m_lockEpoch;
+    if (Screenshare::mgr())
+        Screenshare::mgr()->discardInvalidatedFrames();
+}
+
+void CSessionLockManager::invalidateOutputs() {
+    advanceLockEpoch();
+    m_presentedLocks.clear();
+    m_renderedLocks.clear();
+    for (const auto& monitor : State::monitorState()->monitors())
+        g_pHyprRenderer->damageMonitor(monitor);
+}
+bool CSessionLockManager::confirmedOff(PHLMONITOR monitor) const {
+    return std::ranges::any_of(m_offOutputs, [&](const auto& output) { return output && output == monitor; });
+}
+void CSessionLockManager::onOutputCommit(PHLMONITOR monitor, bool enabled) {
+    const bool wasOff = confirmedOff(monitor);
+    std::erase_if(m_offOutputs, [&](const auto& output) { return !output || output == monitor; });
+    if (!enabled)
+        m_offOutputs.emplace_back(monitor);
+    if (wasOff && enabled && isSessionLocked() && protectsOutput(monitor))
+        invalidateOutputs();
+    if (!enabled && isSessionLocked())
+        onLockscreenPresented(monitor->m_id, m_lockEpoch);
+}
+bool CSessionLockManager::outputsSecure() const {
+    if (!PROTO::sessionLock->isLocked())
+        return false;
+    return std::ranges::all_of(State::monitorState()->monitors(), [this](const auto& monitor) {
+        const auto it = m_presentedLocks.find(monitor->m_id);
+        return !protectsOutput(monitor) || !monitor->m_enabled || confirmedOff(monitor) || (it != m_presentedLocks.end() && it->second == m_lockEpoch);
+    });
+}
+std::string CSessionLockManager::protectionStateJSON() const {
+    const bool  locked  = PROTO::sessionLock->isLocked();
+    std::string outputs = "[";
+    for (const auto& monitor : State::monitorState()->monitors()) {
+        if (!protectsOutput(monitor))
+            continue;
+        if (outputs.size() > 1)
+            outputs += ",";
+        const auto it        = m_presentedLocks.find(monitor->m_id);
+        const bool presented = it != m_presentedLocks.end() && it->second == m_lockEpoch;
+        outputs += std::format("{{\"name\":\"{}\",\"id\":\"{}\",\"enabled\":{},\"offConfirmed\":{},\"covered\":{}}}", escapeJSONStrings(monitor->m_name), monitor->m_id,
+                               monitor->m_enabled, confirmedOff(monitor), presented);
+    }
+    outputs += "]";
+    return std::format(
+        "{{\"scope\":\"{}\",\"phase\":\"{}\",\"locked\":{},\"secure\":{},\"ownerConnected\":{},\"lockId\":\"{}\",\"epoch\":\"{}\",\"lockEpoch\":\"{}\",\"protectedOutputs\":{}}}",
+        locked ? (m_scoped ? "scoped" : "session") : "none",
+        !locked             ? "unlocked" :
+            !m_sessionLock  ? "orphaned" :
+            outputsSecure() ? "secure" :
+                              "preparing",
+        locked, outputsSecure(), m_sessionLock != nullptr, m_lockId, m_lockEpoch, m_lockEpoch, outputs);
+}
+
+bool CSessionLockManager::hasOwner() const {
+    return m_sessionLock != nullptr;
 }

@@ -1,3 +1,4 @@
+#include "../managers/SessionLockManager.hpp"
 #include "OutputCommitCoordinator.hpp"
 
 #include "Monitor.hpp"
@@ -78,6 +79,8 @@ bool COutputCommitCoordinator::canSubmitAsync(const SFrame& frame) const {
 }
 
 COutputCommitCoordinator::eSubmitResult COutputCommitCoordinator::submit(SFrame&& frame) {
+    if (frame.kind == FRAME_COMPOSED)
+        frame.lockEpoch = g_pSessionLockManager->takeRenderedLock(m_monitor->m_id);
     if (!m_monitor || !m_monitor->m_output) {
         if (m_monitor)
             PROTO::presentation->discardUntagged(m_monitor->m_self.lock());
@@ -126,13 +129,15 @@ COutputCommitCoordinator::eSubmitResult COutputCommitCoordinator::submitSynchron
 
     PROTO::presentation->tagQueued(m_monitor->m_self.lock(), 0, frame.tearing, frame.vrr);
 
-    bool ok = frame.kind == FRAME_DIRECT_SCANOUT ? m_monitor->m_output->commit() : m_monitor->m_state.commit();
+    m_syncLockEpoch = frame.lockEpoch;
+    bool ok         = frame.kind == FRAME_DIRECT_SCANOUT ? m_monitor->m_output->commit() : m_monitor->m_state.commit();
     if (!ok && frame.kind == FRAME_COMPOSED && m_monitor->m_inFence.isValid()) {
         m_monitor->m_output->state->resetExplicitFences();
         ok = m_monitor->m_state.commit();
     }
 
     if (!ok) {
+        m_syncLockEpoch = 0;
         PROTO::presentation->discardQueued(m_monitor->m_self.lock(), 0);
         failed(std::move(frame), true);
         return SUBMIT_FAILED;
@@ -198,6 +203,13 @@ void COutputCommitCoordinator::submitted(SFrame& frame, bool async) {
 }
 
 void COutputCommitCoordinator::onPresented(uint64_t id, bool presented) {
+    if (presented) {
+        const auto epoch = id == 0 ? m_syncLockEpoch : (m_pending && m_pending->id == id ? m_pending->lockEpoch : 0);
+        if (epoch)
+            g_pSessionLockManager->onLockscreenPresented(m_monitor->m_id, epoch);
+        if (id == 0)
+            m_syncLockEpoch = 0;
+    }
     if (!ownsCommit(id))
         return;
 

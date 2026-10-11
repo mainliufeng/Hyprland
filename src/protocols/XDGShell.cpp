@@ -78,7 +78,7 @@ CXDGPopupResource::CXDGPopupResource(SP<CXdgPopup> resource_, SP<CXDGSurfaceReso
 
     m_resource->setGrab([this](CXdgPopup* r, wl_resource* seat, uint32_t serial) {
         LOG(Log::DEBUG, "xdg_popup {:x} requests grab", (uintptr_t)this);
-        PROTO::xdgShell->addOrStartGrab(m_self.lock());
+        PROTO::xdgShell->addOrStartGrab(m_self.lock(), CWLSeatResource::fromResource(seat), serial);
     });
 
     if (m_parent)
@@ -199,7 +199,7 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
 
         const auto OWNER = m_owner.lock();
         const auto SURF  = OWNER ? OWNER->m_surface.lock() : nullptr;
-        if (!g_pSeatManager->pointerButtonSerialValid(SEAT, serial, SURF)) {
+        if (!SEAT->manager()->pointerButtonSerialValid(SEAT, serial, SURF)) {
             LOG(Log::DEBUG, "Ignoring xdg_toplevel.move with an invalid serial");
             return;
         }
@@ -224,7 +224,7 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
 
         const auto OWNER = m_owner.lock();
         const auto SURF  = OWNER ? OWNER->m_surface.lock() : nullptr;
-        if (!g_pSeatManager->pointerButtonSerialValid(SEAT, serial, SURF)) {
+        if (!SEAT->manager()->pointerButtonSerialValid(SEAT, serial, SURF)) {
             LOG(Log::DEBUG, "Ignoring xdg_toplevel.resize with an invalid serial");
             return;
         }
@@ -922,15 +922,7 @@ void CXDGWMBase::ping() {
 }
 
 CXDGShellProtocol::CXDGShellProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
-    m_grab             = makeShared<CSeatGrab>();
-    m_grab->m_keyboard = true;
-    m_grab->m_pointer  = true;
-    m_grab->setCallback([this]() {
-        for (auto const& g : m_grabbed) {
-            g->done();
-        }
-        m_grabbed.clear();
-    });
+    ;
 }
 
 void CXDGShellProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
@@ -967,42 +959,57 @@ void CXDGShellProtocol::destroyResource(CXDGPopupResource* resource) {
     std::erase_if(m_popups, [&](const auto& other) { return other.get() == resource; });
 }
 
-void CXDGShellProtocol::addOrStartGrab(SP<CXDGPopupResource> popup) {
-    if (!m_grabOwner) {
-        m_grabOwner = popup;
-        m_grabbed.clear();
-        m_grab->clear();
-        m_grab->add(popup->m_surface->m_surface.lock());
-        if (popup->m_parent)
-            m_grab->add(popup->m_parent->m_surface.lock());
-        g_pSeatManager->setGrab(m_grab);
-        m_grabbed.emplace_back(popup);
+void CXDGShellProtocol::addOrStartGrab(SP<CXDGPopupResource> popup, SP<CWLSeatResource> seat, uint32_t serial) {
+    if (!seat || !popup || !seat->manager()->serialValid(seat, serial, false))
         return;
+    auto  manager = seat->manager();
+    auto& state   = m_grabs[manager];
+    if (!state.grab) {
+        state.grab             = makeShared<CSeatGrab>();
+        state.grab->m_keyboard = true;
+        state.grab->m_pointer  = true;
+        state.grab->setCallback([this, manager] {
+            auto& state  = m_grabs.at(manager);
+            auto  popups = std::move(state.popups);
+            state.owner.reset();
+            state.grab->clear();
+            for (const auto& popup : popups) {
+                if (popup)
+                    popup->done();
+            }
+        });
     }
-
-    m_grabbed.emplace_back(popup);
-
-    m_grab->add(popup->m_surface->m_surface.lock());
-
+    const bool start = !state.owner;
+    if (start) {
+        state.owner = popup;
+        state.popups.clear();
+        state.grab->clear();
+    }
+    state.popups.emplace_back(popup);
+    state.grab->add(popup->m_surface->m_surface.lock());
     if (popup->m_parent)
-        m_grab->add(popup->m_parent->m_surface.lock());
+        state.grab->add(popup->m_parent->m_surface.lock());
+    if (start)
+        manager->setGrab(state.grab);
 }
 
 void CXDGShellProtocol::onPopupDestroy(WP<CXDGPopupResource> popup) {
-    if (popup == m_grabOwner) {
-        g_pSeatManager->setGrab(nullptr);
-        for (auto const& g : m_grabbed) {
-            g->done();
+    for (auto& [manager, state] : m_grabs) {
+        if (popup == state.owner) {
+            manager->setGrab(nullptr);
+            return;
         }
-        m_grabbed.clear();
-        return;
+        std::erase(state.popups, popup);
+        if (popup && popup->m_surface && state.grab)
+            state.grab->remove(popup->m_surface->m_surface.lock());
     }
-
-    std::erase(m_grabbed, popup);
-    if (popup->m_surface)
-        m_grab->remove(popup->m_surface->m_surface.lock());
 }
 
 CXDGSurfaceRole::CXDGSurfaceRole(SP<CXDGSurfaceResource> xdg) : m_xdgSurface(xdg) {
     ;
+}
+
+void CXDGShellProtocol::forgetSeat(CSeatManager* seat) {
+    seat->setGrab(nullptr);
+    m_grabs.erase(seat);
 }

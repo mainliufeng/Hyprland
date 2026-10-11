@@ -3,8 +3,11 @@
 #include "../Compositor.hpp"
 #include "../desktop/state/FocusState.hpp"
 #include "core/Compositor.hpp"
+#include "core/Seat.hpp"
+#include "../managers/SeatManager.hpp"
 
-CKeyboardShortcutsInhibitor::CKeyboardShortcutsInhibitor(SP<CZwpKeyboardShortcutsInhibitorV1> resource_, SP<CWLSurfaceResource> surf) : m_resource(resource_), m_surface(surf) {
+CKeyboardShortcutsInhibitor::CKeyboardShortcutsInhibitor(SP<CZwpKeyboardShortcutsInhibitorV1> resource_, SP<CWLSurfaceResource> surf, SP<CWLSeatResource> seat) :
+    m_resource(resource_), m_surface(surf), m_seat(seat) {
     if UNLIKELY (!m_resource->resource())
         return;
 
@@ -18,6 +21,10 @@ CKeyboardShortcutsInhibitor::CKeyboardShortcutsInhibitor(SP<CZwpKeyboardShortcut
 
 SP<CWLSurfaceResource> CKeyboardShortcutsInhibitor::surface() {
     return m_surface.lock();
+}
+
+CSeatManager* CKeyboardShortcutsInhibitor::manager() const {
+    return m_seat->manager();
 }
 
 bool CKeyboardShortcutsInhibitor::good() {
@@ -48,16 +55,18 @@ void CKeyboardShortcutsInhibitProtocol::destroyInhibitor(CKeyboardShortcutsInhib
 void CKeyboardShortcutsInhibitProtocol::onInhibit(CZwpKeyboardShortcutsInhibitManagerV1* pMgr, uint32_t id, wl_resource* surface, wl_resource* seat) {
     SP<CWLSurfaceResource> surf   = CWLSurfaceResource::fromResource(surface);
     const auto             CLIENT = pMgr->client();
+    const auto             SEAT   = CWLSeatResource::fromResource(seat);
 
     for (auto const& in : m_inhibitors) {
-        if LIKELY (in->surface() != surf)
+        if LIKELY (in->surface() != surf || in->manager() != SEAT->manager())
             continue;
 
-        pMgr->error(ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1_ERROR_ALREADY_INHIBITED, "Already inhibited for surface resource");
+        pMgr->error(ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1_ERROR_ALREADY_INHIBITED, "Already inhibited for this surface and seat");
         return;
     }
 
-    const auto RESOURCE = m_inhibitors.emplace_back(makeUnique<CKeyboardShortcutsInhibitor>(makeShared<CZwpKeyboardShortcutsInhibitorV1>(CLIENT, pMgr->version(), id), surf)).get();
+    const auto RESOURCE =
+        m_inhibitors.emplace_back(makeUnique<CKeyboardShortcutsInhibitor>(makeShared<CZwpKeyboardShortcutsInhibitorV1>(CLIENT, pMgr->version(), id), surf, SEAT)).get();
 
     if UNLIKELY (!RESOURCE->good()) {
         pMgr->noMemory();
@@ -67,16 +76,18 @@ void CKeyboardShortcutsInhibitProtocol::onInhibit(CZwpKeyboardShortcutsInhibitMa
     }
 }
 
-bool CKeyboardShortcutsInhibitProtocol::isInhibited() {
-    if (!Desktop::focusState()->surface())
+bool CKeyboardShortcutsInhibitProtocol::isInhibited(CSeatManager* seat) {
+    seat             = seat ? seat : g_pSeatManager.get();
+    const auto FOCUS = seat->m_state.keyboardFocus.lock();
+    if (!FOCUS)
         return false;
 
-    if (const auto PWINDOW = Desktop::viewState()->query().type(Desktop::View::VIEW_TYPE_WINDOW).surface(Desktop::focusState()->surface()).runWindow();
+    if (const auto PWINDOW = Desktop::viewState()->query().type(Desktop::View::VIEW_TYPE_WINDOW).surface(FOCUS).runWindow();
         PWINDOW && PWINDOW->m_ruleApplicator->noShortcutsInhibit().valueOrDefault())
         return false;
 
     for (auto const& in : m_inhibitors) {
-        if (in->surface() != Desktop::focusState()->surface())
+        if (in->manager() != seat || in->surface() != FOCUS)
             continue;
 
         return true;

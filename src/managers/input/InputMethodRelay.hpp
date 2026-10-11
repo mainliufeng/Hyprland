@@ -9,6 +9,7 @@
 #include <any>
 
 class CInputManager;
+class CSeatManager;
 namespace Render {
     class IHyprRenderer;
 }
@@ -17,37 +18,42 @@ class CInputMethodV2;
 
 class CInputMethodRelay {
   public:
-    CInputMethodRelay();
+    CInputMethodRelay(CSeatManager* seat = nullptr);
+    CSeatManager*                       seat() const;
+    SP<CWLSurfaceResource>              focus() const;
+    const std::vector<UP<CInputPopup>>& popups() const;
 
-    void               onNewIME(SP<CInputMethodV2>);
-    void               onNewTextInput(WP<CTextInputV3> tiv3);
-    void               onNewTextInput(WP<CTextInputV1> pTIV1);
+    void                                onNewIME(SP<CInputMethodV2>);
+    void                                onNewTextInput(WP<CTextInputV3> tiv3);
+    void                                onNewTextInput(WP<CTextInputV1> pTIV1);
 
-    void               activateIME(CTextInput* pInput, bool shouldCommit = true);
-    void               deactivateIME(CTextInput* pInput, bool shouldCommit = true);
-    void               commitIMEState(CTextInput* pInput);
-    void               removeTextInput(CTextInput* pInput);
+    void                                activateIME(CTextInput* pInput, bool shouldCommit = true);
+    void                                deactivateIME(CTextInput* pInput, bool shouldCommit = true);
+    void                                commitIMEState(CTextInput* pInput);
+    void                                removeTextInput(CTextInput* pInput);
 
-    void               onKeyboardFocus(SP<CWLSurfaceResource>);
+    void                                onKeyboardFocus(SP<CWLSurfaceResource>);
 
-    CTextInput*        getFocusedTextInput();
+    CTextInput*                         getFocusedTextInput();
 
-    void               removePopup(CInputPopup*);
+    void                                removePopup(CInputPopup*);
 
-    CInputPopup*       popupFromCoords(const Vector2D& point);
-    CInputPopup*       popupFromSurface(const SP<CWLSurfaceResource> surface);
+    CInputPopup*                        popupFromCoords(const Vector2D& point);
+    CInputPopup*                        popupFromSurface(const SP<CWLSurfaceResource> surface);
 
-    void               updateAllPopups();
+    void                                updateAllPopups();
 
-    WP<CInputMethodV2> m_inputMethod;
+    WP<CInputMethodV2>                  m_inputMethod;
 
   private:
+    CSeatManager*                m_seat = nullptr;
     std::vector<UP<CTextInput>>  m_textInputs;
     std::vector<UP<CInputPopup>> m_inputMethodPopups;
 
     WP<CWLSurfaceResource>       m_lastKbFocus;
 
     struct {
+        CHyprSignalListener focus;
         CHyprSignalListener newTIV3;
         CHyprSignalListener newTIV1;
         CHyprSignalListener newIME;

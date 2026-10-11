@@ -2,16 +2,22 @@
 
 #include <vector>
 #include <cstdint>
+#include <variant>
 #include "WaylandProtocol.hpp"
 #include "ext-session-lock-v1.hpp"
+#include "hyprland-lock-scope-v1.hpp"
 #include "../helpers/signal/Signal.hpp"
 
+using TLockResource        = std::variant<SP<CExtSessionLockV1>, SP<CHyprlandLockScopeV1>>;
+using TLockSurfaceResource = std::variant<SP<CExtSessionLockSurfaceV1>, SP<CHyprlandLockScopeSurfaceV1>>;
+
+class CSeatDesktop;
 class CSessionLock;
 class CWLSurfaceResource;
 
 class CSessionLockSurface {
   public:
-    CSessionLockSurface(SP<CExtSessionLockSurfaceV1> resource_, SP<CWLSurfaceResource> surface_, PHLMONITOR pMonitor_, WP<CSessionLock> owner_);
+    CSessionLockSurface(TLockSurfaceResource resource_, SP<CWLSurfaceResource> surface_, PHLMONITOR pMonitor_, WP<CSessionLock> owner_);
     ~CSessionLockSurface();
 
     bool                   good();
@@ -26,15 +32,17 @@ class CSessionLockSurface {
     } m_events;
 
   private:
-    SP<CExtSessionLockSurfaceV1> m_resource;
-    WP<CSessionLock>             m_sessionLock;
-    WP<CWLSurfaceResource>       m_surface;
-    PHLMONITORREF                m_monitor;
+    TLockSurfaceResource                                  m_resource;
+    WP<CSessionLock>                                      m_sessionLock;
+    WP<CWLSurfaceResource>                                m_surface;
+    PHLMONITORREF                                         m_monitor;
 
-    bool                         m_ackdConfigure = false;
-    bool                         m_committed     = false;
+    std::vector<std::pair<uint32_t, std::pair<int, int>>> m_configures;
+    std::pair<int, int>                                   m_ackSize;
+    bool                                                  m_ackdConfigure = false;
+    bool                                                  m_committed     = false;
 
-    void                         sendConfigure();
+    void                                                  sendConfigure();
 
     struct {
         CHyprSignalListener monitorMode;
@@ -45,12 +53,17 @@ class CSessionLockSurface {
 
 class CSessionLock {
   public:
-    CSessionLock(SP<CExtSessionLockV1> resource_);
+    CSessionLock(TLockResource resource_);
     ~CSessionLock();
 
-    bool good();
-    void sendLocked();
-    void sendDenied();
+    bool         good();
+    void         sendLocked();
+    void         sendDenied();
+    bool         scoped() const;
+    bool         allowsSeatInput(const CSeatDesktop* seat) const;
+    bool         excludesOutput(PHLMONITOR monitor) const;
+    bool         inert() const;
+    wl_resource* resource() const;
 
     struct {
         CSignalT<SP<CSessionLockSurface>> newLockSurface;
@@ -59,9 +72,16 @@ class CSessionLock {
     } m_events;
 
   private:
-    SP<CExtSessionLockV1> m_resource;
+    TLockResource m_resource;
 
-    bool                  m_inert = false;
+    struct SSeatExemption {
+        std::string name, identity;
+        uint64_t    generation = 0;
+    };
+    std::vector<SSeatExemption> m_allowedSeats;
+    std::vector<PHLMONITORREF>  m_excludedOutputs;
+    bool                        m_activated = false;
+    bool                        m_inert     = false;
 
     friend class CSessionLockProtocol;
 };
@@ -72,9 +92,11 @@ class CSessionLockProtocol : public IWaylandProtocol {
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
+    void         bindScopeManager(wl_client* client, uint32_t ver, uint32_t id);
     bool         isLocked();
     void         forceUnlock();
     void         forceLock();
+    void         abandonForFullLock();
 
     struct {
         CSignalT<SP<CSessionLock>> newLock;
@@ -85,19 +107,29 @@ class CSessionLockProtocol : public IWaylandProtocol {
     void destroyResource(CSessionLock* lock);
     void destroyResource(CSessionLockSurface* surf);
     void onLock(CExtSessionLockManagerV1* pMgr, uint32_t id);
-    void onGetLockSurface(CExtSessionLockV1* lock, uint32_t id, wl_resource* surface, wl_resource* output);
+    void activate(CSessionLock* lock);
+    void onGetLockSurface(CSessionLock* lock, uint32_t id, wl_resource* surface, wl_resource* output);
 
     bool m_locked = false;
 
     //
-    std::vector<UP<CExtSessionLockManagerV1>> m_managers;
-    std::vector<SP<CSessionLock>>             m_locks;
-    std::vector<SP<CSessionLockSurface>>      m_lockSurfaces;
+    std::vector<UP<CExtSessionLockManagerV1>>    m_managers;
+    std::vector<UP<CHyprlandLockScopeManagerV1>> m_scopeManagers;
+    std::vector<UP<CHyprlandLockGuardV1>>        m_guards;
+    std::vector<SP<CSessionLock>>                m_locks;
+    std::vector<SP<CSessionLockSurface>>         m_lockSurfaces;
 
     friend class CSessionLock;
     friend class CSessionLockSurface;
 };
 
+class CLockScopeProtocol : public IWaylandProtocol {
+  public:
+    CLockScopeProtocol(const wl_interface* iface, int ver, const std::string& name);
+    void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) override;
+};
+
 namespace PROTO {
     inline UP<CSessionLockProtocol> sessionLock;
+    inline UP<CLockScopeProtocol>   lockScope;
 };

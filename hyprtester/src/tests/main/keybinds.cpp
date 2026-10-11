@@ -55,6 +55,16 @@ static bool checkFlag() {
     return exists;
 }
 
+static std::string bindRepeatCounter(const std::string& keybind) {
+    return getFromSocket(std::format("/eval _G.hyprtester_repeat_count = 0; "
+                                     "hl.bind('{}', function() _G.hyprtester_repeat_count = _G.hyprtester_repeat_count + 1 end, {{ repeating = true }})",
+                                     keybind));
+}
+
+static std::string repeatCount() {
+    return getFromSocket("/repl return _G.hyprtester_repeat_count");
+}
+
 static bool attemptCheckFlag(int attempts, int intervalMs) {
     for (int i = 0; i < attempts; i++) {
         if (checkFlag())
@@ -298,106 +308,82 @@ SUBTEST(longPressOnlyKeyRelease) {
 }
 
 SUBTEST(repeat) {
-    EXPECT(checkFlag(), false);
-    EXPECT(getFromSocket(std::format("/eval hl.bind('SUPER + Y', hl.dsp.exec_cmd('touch {}'), {{ repeating = true }})", flagFile)), "ok");
+    EXPECT(bindRepeatCounter("SUPER + Y"), "ok");
     EXPECT(getFromSocket("r/eval hl.config({ input = { repeat_delay = 100 } })"), "ok");
-    // press keybind
     OK(getFromSocket(pluginKeybindCmd(true, 7, 29)));
-    // await flag
+    EXPECT(repeatCount(), "1");
+
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), true);
-    // await repeat delay
+    EXPECT(getFromSocket("/eval assert(_G.hyprtester_repeat_count > 1)"), "ok");
+    auto count = repeatCount();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), true);
-    // check that it continues repeating
+    EXPECT_NOT(repeatCount(), count);
+    count = repeatCount();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), true);
-    // release keybind
+    EXPECT_NOT(repeatCount(), count);
+
     OK(getFromSocket(pluginKeybindCmd(false, 0, 29)));
+    const auto RELEASED_COUNT = repeatCount();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT(repeatCount(), RELEASED_COUNT);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT(repeatCount(), RELEASED_COUNT);
     EXPECT(getFromSocket("/eval hl.unbind('SUPER + Y')"), "ok");
 }
 
 SUBTEST(keyRepeat) {
-    // wait until flag becomes false (CI timing can vary)
-    bool ok = false;
-    for (int i = 0; i < 20; ++i) {
-        if (!checkFlag()) {
-            ok = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    EXPECT(ok, true);
-
-    EXPECT(getFromSocket(std::format("/eval hl.bind('Y', hl.dsp.exec_cmd('touch {}'), {{ repeating = true }})", flagFile)), "ok");
+    EXPECT(bindRepeatCounter("Y"), "ok");
     EXPECT(getFromSocket("r/eval hl.config({ input = { repeat_delay = 100 } })"), "ok");
-    // press keybind
     OK(getFromSocket(pluginKeybindCmd(true, 0, 29)));
-    // await flag
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT(checkFlag(), true);
-    // await repeat delay
+    EXPECT(repeatCount(), "1");
+
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), true);
-    // check that it continues repeating
+    EXPECT(getFromSocket("/eval assert(_G.hyprtester_repeat_count > 1)"), "ok");
+    const auto REPEATED_COUNT = repeatCount();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), true);
-    // release keybind
+    EXPECT_NOT(repeatCount(), REPEATED_COUNT);
+
     OK(getFromSocket(pluginKeybindCmd(false, 0, 29)));
+    const auto RELEASED_COUNT = repeatCount();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT(repeatCount(), RELEASED_COUNT);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT(repeatCount(), RELEASED_COUNT);
     EXPECT(getFromSocket("/eval hl.unbind('Y')"), "ok");
 }
 
 SUBTEST(repeatRelease) {
-    // wait until flag becomes false (CI timing can vary)
-    bool ok = false;
-    for (int i = 0; i < 20; ++i) {
-        if (!checkFlag()) {
-            ok = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    EXPECT(ok, true);
-    EXPECT(getFromSocket(std::format("/eval hl.bind('SUPER + Y', hl.dsp.exec_cmd('touch {}'), {{ repeating = true }})", flagFile)), "ok");
+    EXPECT(bindRepeatCounter("SUPER + Y"), "ok");
     EXPECT(getFromSocket("r/eval hl.config({ input = { repeat_delay = 100 } })"), "ok");
-    // press keybind
     OK(getFromSocket(pluginKeybindCmd(true, 7, 29)));
-    // await flag
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT(checkFlag(), true);
-    // release keybind
+    EXPECT(repeatCount(), "1");
+
     OK(getFromSocket(pluginKeybindCmd(false, 0, 29)));
-    // await repeat delay
+    const auto RELEASED_COUNT = repeatCount();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    clearFlag();
+    EXPECT(repeatCount(), RELEASED_COUNT);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), false);
-    // check that it is not repeating
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), false);
+    EXPECT(repeatCount(), RELEASED_COUNT);
     EXPECT(getFromSocket("/eval hl.unbind('SUPER + Y')"), "ok");
 }
 
 SUBTEST(repeatOnlyKeyRelease) {
-    EXPECT(checkFlag(), false);
-    EXPECT(getFromSocket(std::format("/eval hl.bind('SUPER + Y', hl.dsp.exec_cmd('touch {}'), {{ repeating = true }})", flagFile)), "ok");
+    EXPECT(bindRepeatCounter("SUPER + Y"), "ok");
     EXPECT(getFromSocket("r/eval hl.config({ input = { repeat_delay = 100 } })"), "ok");
-    // press keybind
     OK(getFromSocket(pluginKeybindCmd(true, 7, 29)));
-    // await flag
+    EXPECT(repeatCount(), "1");
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), true);
-    // release key, keep modifier
+    EXPECT(getFromSocket("/eval assert(_G.hyprtester_repeat_count > 1)"), "ok");
+
+    // Releasing the key alone must stop repeat while the modifier stays held.
     OK(getFromSocket(pluginKeybindCmd(false, 7, 29)));
-    // await repeat delay
+    const auto RELEASED_COUNT = repeatCount();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    clearFlag();
+    EXPECT(repeatCount(), RELEASED_COUNT);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), false);
-    // check that it is not repeating
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT(checkFlag(), false);
+    EXPECT(repeatCount(), RELEASED_COUNT);
     OK(getFromSocket(pluginKeybindCmd(false, 0, 29)));
     EXPECT(getFromSocket("/eval hl.unbind('SUPER + Y')"), "ok");
 }

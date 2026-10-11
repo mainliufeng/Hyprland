@@ -6,18 +6,22 @@
 #include "keyboard-shortcuts-inhibit-unstable-v1.hpp"
 
 class CWLSurfaceResource;
+class CWLSeatResource;
+class CSeatManager;
 
 class CKeyboardShortcutsInhibitor {
   public:
-    CKeyboardShortcutsInhibitor(SP<CZwpKeyboardShortcutsInhibitorV1> resource_, SP<CWLSurfaceResource> surf);
+    CKeyboardShortcutsInhibitor(SP<CZwpKeyboardShortcutsInhibitorV1> resource_, SP<CWLSurfaceResource> surf, SP<CWLSeatResource> seat);
 
     // read-only pointer, may be invalid
     SP<CWLSurfaceResource> surface();
+    CSeatManager*          manager() const;
     bool                   good();
 
   private:
     SP<CZwpKeyboardShortcutsInhibitorV1> m_resource;
     WP<CWLSurfaceResource>               m_surface;
+    SP<CWLSeatResource>                  m_seat;
 };
 
 class CKeyboardShortcutsInhibitProtocol : public IWaylandProtocol {
@@ -26,7 +30,7 @@ class CKeyboardShortcutsInhibitProtocol : public IWaylandProtocol {
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
-    bool         isInhibited();
+    bool         isInhibited(CSeatManager* seat = nullptr);
 
   private:
     void onManagerResourceDestroy(wl_resource* res);

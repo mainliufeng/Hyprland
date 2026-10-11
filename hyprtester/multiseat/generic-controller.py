@@ -1,0 +1,248 @@
+"""Generic compositor interfaces, independent of any desktop shell."""
+import json, os, pathlib, signal, shlex, select, socket, subprocess, tempfile, time
+FORK=pathlib.Path(__file__).resolve().parents[2]
+ROOT=FORK
+BASE=pathlib.Path(tempfile.mkdtemp(prefix='gc-'))
+RT=BASE/'r';RT.mkdir(mode=0o700)
+PROCESSES=[]
+ENV=os.environ.copy()
+for key in ('HYPRLAND_INSTANCE_SIGNATURE','WAYLAND_DISPLAY','WAYLAND_SOCKET','DISPLAY','DBUS_SESSION_BUS_ADDRESS'):
+    ENV.pop(key,None)
+ENV.update(XDG_RUNTIME_DIR=str(RT),XDG_CONFIG_HOME=str(BASE/'config'),XDG_CACHE_HOME=str(BASE/'cache'),XDG_STATE_HOME=str(BASE/'state'),GCOV_PREFIX=str(BASE/'coverage'),HYPRLAND_HEADLESS_ONLY='1',AQ_DRM_DEVICES='/dev/null',LIBSEAT_BACKEND='noop')
+def wait(callback,timeout=25):
+    end=time.monotonic()+timeout
+    while time.monotonic()<end:
+        try:
+            value=callback()
+            if value:return value
+        except (OSError,ValueError,subprocess.SubprocessError):pass
+        time.sleep(.1)
+    raise RuntimeError('readiness timeout')
+def ctl(command,as_json=False):
+    path=RT/'hypr'/ENV['HYPRLAND_INSTANCE_SIGNATURE']/'.socket.sock'
+    assert path.is_relative_to(RT)
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(4);connection.connect(str(path));connection.sendall((('j' if as_json else '')+'/'+command).encode())
+        chunks=[]
+        while data:=connection.recv(65536):chunks.append(data)
+    answer=b''.join(chunks).decode().strip()
+    return json.loads(answer) if as_json else answer
+def ok(command):
+    answer=ctl(command)
+    assert answer=='ok',(command,answer)
+def primary_state():
+    monitors=ctl('monitors',True)
+    return {'workspace':ctl('activeworkspace',True),'window':ctl('activewindow',True).get('address'),'cursor':ctl('cursorpos',True),'output':next(m for m in monitors if m['name']=='physical')['activeWorkspace']}
+def record(name):print('PASS',name,flush=True)
+def initialize():
+    assert os.getenv('HYPRLAND_TEST_SANDBOX')=='1' and not pathlib.Path('/dev/input').exists(),'Use generic-controller.sh in its device sandbox'
+    config=BASE/'hyprland.lua'
+    config.write_text('hl.monitor({output="",mode="1280x800",position="auto",scale=1})\nhl.config({animations={enabled=false},xwayland={enabled=false},misc={disable_hyprland_logo=true,disable_splash_rendering=true,force_default_wallpaper=0},debug={enable_stdout_logs=true}})\n')
+    bus=subprocess.Popen(['dbus-daemon','--session','--nofork','--print-address=1'],env=ENV,stdout=subprocess.PIPE,stderr=open(BASE/'bus.log','w'),text=True,start_new_session=True)
+    PROCESSES.append(bus)
+    ENV['DBUS_SESSION_BUS_ADDRESS']=bus.stdout.readline().strip()
+    parent=subprocess.Popen(['mutter','--headless','--wayland','--no-x11','--wayland-display=parent','--virtual-monitor','1280x800'],env=ENV,stdout=open(BASE/'mutter.log','w'),stderr=subprocess.STDOUT,start_new_session=True)
+    PROCESSES.append(parent)
+    wait(lambda:(RT/'parent').is_socket())
+    ENV['WAYLAND_DISPLAY']='parent'
+    process=subprocess.Popen([ENV['MULTISEAT_HYPRLAND'],'-c',str(config)],env=ENV,stdout=open(BASE/'Hyprland.log','w'),stderr=subprocess.STDOUT,start_new_session=True)
+    PROCESSES.append(process)
+    ENV['HYPRLAND_INSTANCE_SIGNATURE']=wait(lambda:next((p.name for p in (RT/'hypr').glob('*') if (p/'.socket.sock').is_socket()),None))
+    wait(lambda:ctl('monitors',True) is not None)
+    monitors=ctl('monitors',True)
+    ok('output create headless physical')
+    ok('eval hl.monitor({output="physical",mode="1280x800",position="0x0",scale=1})')
+    for monitor in monitors:ok('eval hl.monitor({output='+json.dumps(monitor['name'])+',disabled=true})')
+    ENV['WAYLAND_DISPLAY']=wait(lambda:next((p.name for p in RT.glob('wayland-*') if p.is_socket()),None))
+    ok('dispatch hl.dsp.focus({monitor="physical"})');ok('dispatch hl.dsp.focus({workspace="1"})')
+def cleanup():
+    for process in reversed(PROCESSES):
+        if process.poll() is None:
+            try:os.killpg(process.pid,signal.SIGTERM)
+            except ProcessLookupError:pass
+    for process in reversed(PROCESSES):
+        try:process.wait(timeout=5)
+        except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL)
+    print('Artifacts:',BASE,flush=True)
+
+import uuid
+
+OWNER = uuid.uuid4().hex + uuid.uuid4().hex
+VIEW = uuid.uuid4().hex + uuid.uuid4().hex
+
+def send(device, command):
+    device.stdin.write(command + "\n"); device.stdin.flush()
+    assert select.select([device.stdout], [], [], 5)[0] and device.stdout.readline().strip() == 'done', command
+
+def key(device, code):
+    for command in ('mods 64', 'key 125 1', f'key {code} 1', f'key {code} 0', 'key 125 0', 'mods 0'):
+        send(device, command)
+
+def state(): return ctl('seat state research', True)
+def configure(overrides=True, owner=OWNER):
+    value = {'owner':owner,'seatName':'research','seatId':state()['seatId'],'callback':str(RT/'controller.sock'),
+        'bindings':[{'keys':['SUPER','2'],'action':'workspace','argument':'name:research-two','overrideInherited':overrides},
+                    {'keys':['SUPER','2'],'action':'workspace','argument':'name:observer-only','viewOnly':True,'overrideInherited':overrides},
+                    {'keys':['SUPER','A'],'action':'notify','argument':'inspect'},
+                    {'keys':['SUPER','A'],'action':'notify','argument':'inspect','viewOnly':True}], 'overlays':[]}
+    return ctl('seat configure ' + json.dumps(value))
+
+def receive(device):
+    key(device,30)
+    connection,_=listener.accept()
+    with connection:
+        data=b''
+        while b'\n' not in data: data+=connection.recv(4096)
+    return json.loads(data)['params']
+
+try:
+    initialize()
+    ok('seat create research physical'); ok('seat workspace research name:research-one')
+    for source,name in (('virtual-keyboard-unstable-v1','virtual-keyboard'),('wlr-virtual-pointer-unstable-v1','virtual-pointer')):
+        for mode,extension in (('client-header','h'),('private-code','c')):
+            subprocess.run(['wayland-scanner',mode,str(FORK/'protocols'/(source+'.xml')),str(BASE/(name+'.'+extension))],check=True)
+    flags=subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','xkbcommon'],text=True).split()
+    subprocess.run(['cc','-I'+str(BASE),str(FORK/'hyprtester/multiseat/input.c'),str(BASE/'virtual-keyboard.c'),str(BASE/'virtual-pointer.c'),'-o',str(BASE/'input'),*flags],check=True)
+    def device(name,display):
+        process=subprocess.Popen([str(BASE/'input'),name,'physical'],env=ENV|{'WAYLAND_DISPLAY':display},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open(BASE/(name+'-input.log'),'w'),text=True,start_new_session=True)
+        PROCESSES.append(process)
+        assert select.select([process.stdout],[],[],5)[0] and process.stdout.readline().strip()=='ready'
+        return process
+    background=device('research',state()['display']); primary=device('Hyprland',ENV['WAYLAND_DISPLAY'])
+    config=BASE/'hyprland.lua'
+    config.write_text(config.read_text()+'\nhl.bind("SUPER + 2",hl.dsp.focus({workspace="name:inherited"}),{})\n')
+    ok('eval hl.bind("SUPER + 2",hl.dsp.focus({workspace="name:inherited"}),{})')
+    assert 'conflicts' in configure(False)
+    answer=json.loads(configure()); assert answer['configured'] and 'SUPER + 2' in answer['inheritedOverrides'],answer
+    assert 'another controller' in configure(owner='independent-controller-owner-00000000002')
+    original=primary_state()
+    key(background,3); assert state()['workspace']=='research-two',state()
+    assert primary_state()==original
+    key(primary,3); assert ctl('activeworkspace',True)['name']=='inherited'
+    record('generic bindings override only the selected seat; existing primary shortcuts remain native without a shell')
+    target=BASE/'native-text'
+    application=subprocess.Popen([os.environ['HYPRLAND_TEST_PYTHON'],str(FORK/'hyprtester/multiseat/gtk-window.py'),'generic-native',str(target)],
+        env=ENV|{'WAYLAND_DISPLAY':state()['display'],'GDK_BACKEND':'wayland','GTK_IM_MODULE':'wayland'},
+        stdout=open(BASE/'application.log','w'),stderr=subprocess.STDOUT,start_new_session=True)
+    PROCESSES.append(application)
+    wait(lambda:target.with_suffix('.ready').exists())
+    def plain_key(device,code):
+        for event in (f'key {code} 1',f'key {code} 0'):
+            device.stdin.write(event+'\n');device.stdin.flush()
+            assert select.select([device.stdout],[],[],5)[0] and device.stdout.readline().strip()=='done'
+    plain_key(background,18);wait(lambda:target.read_text()=='e')
+    capture=BASE/'native.png';capture.touch(mode=0o600)
+    frame=ctl('seat snapshot research '+state()['seatId']+' current png '+str(capture),True)
+    assert frame['window']=='generic-native' and frame['frameId'] and capture.read_bytes().startswith(b'\x89PNG') and capture.stat().st_size>1000
+    grant = uuid.uuid4().hex
+    current = state()
+    assert ctl('seat export-grant research '+current['seatId']+' '+current['generation']+' '+grant,True)['seatId'] == current['seatId']
+    authorized = BASE/'authorized.png'; authorized.touch(mode=0o600)
+    frame = ctl('seat authorized-snapshot research '+current['seatId']+' current png '+str(authorized)+' '+current['generation']+' '+grant,True)
+    assert frame['frameId'] and authorized.read_bytes().startswith(b'\x89PNG'), frame
+    invalid = BASE/'unauthorized.png'
+    answer = ctl('seat authorized-snapshot research '+current['seatId']+' current png '+str(invalid)+' '+current['generation']+' '+'0'*32)
+    assert answer == 'invalid seat export authorization' and not invalid.exists(), answer
+    compatibility = BASE/'compatibility.png'; compatibility.touch(mode=0o600)
+    alias = ctl('seat agent-snapshot research '+current['seatId']+' current png '+str(compatibility)+' '+current['generation']+' '+grant,True)
+    assert alias['frameId'] and compatibility.read_bytes().startswith(b'\x89PNG'), alias
+    record('canonical authorized capture checks the grant and retains the initial spelling as an alias')
+    assert ctl('seat present research '+state()['seatId']+' physical current '+VIEW,True)['active']
+    plain_key(primary,45);time.sleep(.1);assert target.read_text()=='e'
+    takeover = ctl('seat present-control '+VIEW+' yes',True)
+    assert takeover['physicalControl'] and takeover['humanControl'] == takeover['physicalControl'], takeover
+    window=next(w for w in ctl('clients',True) if w['title']=='generic-native')
+    origin=state()['position']
+    allocation=wait(lambda:json.loads(target.with_suffix('.geometry').read_text()))['entry']
+    x=round(window['at'][0]-origin[0]+allocation[0]+allocation[2]/2)
+    y=round(window['at'][1]-origin[1]+allocation[1]+allocation[3]/2)
+    for event in (f'motion {x} {y}', 'button 272 1', 'button 272 0'):
+        send(primary,event)
+    wait(lambda:state()['window']=='generic-native')
+    plain_key(primary,45);wait(lambda:target.read_text()=='ex')
+    ctl('seat present-control '+VIEW+' no',True);ok('seat unpresent '+VIEW)
+    current=state();ctl('seat control research '+current['seatId']+' '+current['generation']+' resume',True)
+    background=device('research',state()['display'])
+    record('standalone controller captures a real GTK application, blocks readonly typing and routes native takeover input without a shell')
+    assert json.loads(configure())['configured']
+    listener=socket.socket(socket.AF_UNIX);listener.settimeout(5);listener.bind(str(RT/'controller.sock'));listener.listen()
+    event=receive(background); assert event['mode']=='control' and event['action']=='inspect'
+    assert ctl('seat validate-context '+event['actionId']+' '+OWNER,True)['name']=='research'
+    assert ctl('seat validate-context '+event['actionId']+' wrong-owner')=='stale action context'
+    assert 'owned-seat-action-context-v1' in ctl('seat capabilities',True)['features']
+    dispatch='hl.dsp.focus({workspace="name:owned-async-target"})'
+    before=primary_state();workspace_before=state()['workspace']
+    assert ctl('seat context-dispatch '+event['actionId']+' '+dispatch)=='stale action context'
+    assert ctl('seat context-dispatch '+event['actionId']+' wrong-owner '+dispatch)=='stale action context'
+    assert primary_state()==before and state()['workspace']==workspace_before
+    ok('seat context-dispatch '+event['actionId']+' '+OWNER+' '+dispatch)
+    assert state()['workspace']=='owned-async-target' and primary_state()==before
+    record('generic notifications retain controller ownership during dispatch and change only their selected seat')
+    ok('seat ensure-workspace research '+state()['seatId']+' name:observer-only')
+    assert ctl('seat present research '+state()['seatId']+' physical current '+VIEW,True)['active']
+    background_before=state()['workspace']
+    key(primary,3); view=ctl('seat presentation '+VIEW,True)
+    assert view['workspace']=='observer-only' and state()['workspace']==background_before,(view,state())
+    event=receive(primary);assert event['mode']=='readonly'
+    assert ctl('seat validate-context '+event['actionId']+' '+OWNER,True)['mode']=='readonly'
+    before=primary_state();view_before=ctl('seat presentation '+VIEW,True)['workspace']
+    assert ctl('seat context-dispatch '+event['actionId']+' '+OWNER+' '+dispatch)=='readonly action context cannot dispatch'
+    assert primary_state()==before and state()['workspace']==background_before
+    assert ctl('seat presentation '+VIEW,True)['workspace']==view_before
+    background_event=receive(background);assert background_event['mode']=='control'
+    assert ctl('seat validate-context '+background_event['actionId']+' '+OWNER,True)['mode']=='control'
+    assert ctl('seat present research '+state()['seatId']+' physical current '+VIEW,True)['active']
+    assert 'changed' in ctl('seat validate-context '+event['actionId']+' '+OWNER)
+    ok('seat unpresent '+VIEW)
+    record('readonly view has independent workspace state; hidden-seat actions stay writable; changed view invalidates pending actions')
+    command=shlex.join(['/bin/sh','-c','env > '+shlex.quote(str(BASE/'exec-env'))])
+    ok('eval hl.bind("SUPER + T",hl.dsp.exec_cmd('+json.dumps(command)+'),{})')
+    key(background,20)
+    environment=wait(lambda:dict(line.split('=',1) for line in (BASE/'exec-env').read_text().splitlines() if '=' in line))
+    context=environment['HYPRLAND_ACTION_ID']
+    assert environment['HYPRLAND_SEAT_NAME']=='research'
+    assert ctl('seat validate-context '+context,True)['seatId']==state()['seatId']
+    ok('seat context-dispatch '+context+' hl.dsp.focus({workspace="name:async-target"})')
+    assert state()['workspace']=='async-target'
+    revoked_event=receive(background)
+    assert ctl('seat validate-context '+revoked_event['actionId']+' '+OWNER,True)['mode']=='control'
+    ctl('seat control research '+state()['seatId']+' '+state()['generation']+' pause',True)
+    before=primary_state();workspace_before=state()['workspace']
+    assert ctl('seat context-dispatch '+context+' hl.dsp.focus({workspace="1"})')=='stale action context'
+    assert ctl('seat context-dispatch '+revoked_event['actionId']+' '+OWNER+' '+dispatch)=='stale action context'
+    assert primary_state()==before and state()['workspace']==workspace_before
+    record('generic exec inherits seat context; revoked async actions fail without fallback to primary')
+    current=state();ctl('seat control research '+current['seatId']+' '+current['generation']+' resume',True)
+    # Recreate the virtual device after explicit generation revocation.
+    background=device('research',state()['display'])
+    assert json.loads(configure())['configured']
+    ok('reload');assert ctl('seat configuration-renew '+OWNER)=='configuration registry was reloaded'
+    assert json.loads(configure())['configured']
+    key(background,3);assert state()['workspace']=='research-two'
+    expired_event=receive(background)
+    before=primary_state();workspace_before=state()['workspace']
+    time.sleep(5.2)
+    assert ctl('seat context-dispatch '+expired_event['actionId']+' '+OWNER+' '+dispatch)=='stale action context'
+    assert primary_state()==before and state()['workspace']==workspace_before
+    assert ctl('seat configuration-renew '+OWNER)=='configuration lease expired'
+    key(background,3);assert state()['workspace']=='inherited'
+    record('reload requires explicit configuration restoration; expired controllers stop overriding original bindings')
+    current=state()
+    ctl('seat lock-policy research '+current['seatId']+' '+current['generation']+' allow',True)
+    ok('seat create-private-output isolated-private')
+    wait(lambda:any(m['name']=='isolated-private' for m in ctl('monitors',True)))
+    for mode,extension in (('client-header','h'),('private-code','c')):
+        subprocess.run(['wayland-scanner',mode,str(FORK/'protocols/hyprland-lock-scope-v1.xml'),str(BASE/('lock-scope.'+extension))],check=True)
+    flags=subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client'],text=True).split()
+    subprocess.run(['cc','-I'+str(BASE),str(FORK/'hyprtester/multiseat/lock-scope.c'),str(BASE/'lock-scope.c'),'-o',str(BASE/'scope-probe'),*flags],check=True)
+    locker=subprocess.Popen([str(BASE/'scope-probe')],env=ENV,stdin=subprocess.PIPE,stdout=open(BASE/'scope-events','w'),stderr=open(BASE/'scope.log','w'),text=True,start_new_session=True)
+    PROCESSES.append(locker)
+    wait(lambda:ctl('seat lock-state',True)['secure'])
+    lockstate=ctl('seat lock-state',True)
+    assert state()['paused'] and {o['name'] for o in lockstate['protectedOutputs']}=={'physical','isolated-private'},lockstate
+    assert 'secure' in (BASE/'scope-events').read_text()
+    locker.stdin.write('unlock\n');locker.stdin.flush();wait(lambda:not ctl('seat lock-state',True)['locked'])
+    assert state()['paused']
+    record('standalone scope controller protects every seat/output by default, even preauthorized seats and private outputs; unlock never resumes input')
+finally:
+    cleanup()

@@ -9,6 +9,7 @@ namespace Aquamarine {
 }
 
 struct SBackdropScope;
+class CSeatDesktop;
 
 namespace Render {
     class IRenderbuffer;
@@ -49,6 +50,7 @@ namespace Render {
         // Nested draws retain session routing, source buffers and persistent caches.
         [[nodiscard]] CRenderDataScope saveDrawState();
 
+        CSeatDesktop*                  m_sceneSeat = nullptr;
         SRenderData                    m_data;
         CRenderPass                    m_pass;
         CRenderPass*                   m_currentPass = nullptr;

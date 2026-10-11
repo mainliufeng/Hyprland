@@ -7,6 +7,7 @@ enum eSurfaceRole : uint8_t {
     SURFACE_ROLE_EASTER_EGG,
     SURFACE_ROLE_SUBSURFACE,
     SURFACE_ROLE_CURSOR,
+    SURFACE_ROLE_SESSION_LOCK,
 };
 
 class ISurfaceRole {

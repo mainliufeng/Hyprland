@@ -1,4 +1,6 @@
+#include "../../managers/SeatDesktop.hpp"
 #include "FocusState.hpp"
+#include "../../managers/SeatActionContext.hpp"
 #include "../view/window/WindowFullscreenPolicy.hpp"
 #include "../view/window/WindowGroupMembership.hpp"
 #include "../view/window/Window.hpp"
@@ -74,6 +76,10 @@ static SFullscreenWorkspaceFocusResult onFullscreenWorkspaceFocusWindow(PHLWINDO
 }
 
 void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface, bool forceFSCycle) {
+    // Validate the seat's destination before a fullscreen policy can mutate
+    // windows on another workspace or a focus grab can reject the request.
+    if (const auto seat = SeatInput::current(); seat && !seat->canFocusWindow(pWindow, surface, true))
+        return;
     if (pWindow) {
         if (!pWindow->m_workspace)
             return;
@@ -97,6 +103,12 @@ void CFocusState::fullWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWL
 }
 
 void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLSurfaceResource> surface) {
+    if (auto seat = SeatInput::current()) {
+        seat->focusWindow(pWindow, surface);
+        return;
+    }
+    if (pWindow && SeatInput::registry()->isPrivateOutput(pWindow->m_monitor.lock()))
+        return;
     static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PSPECIALFALLTHROUGH = CConfigValue<Config::INTEGER>("input:special_fallthrough");
 
@@ -139,7 +151,7 @@ void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLS
             PLASTWINDOW->m_ruleApplicator->propertiesChanged(Rule::RULE_PROP_FOCUS);
             PLASTWINDOW->presentation().refreshValues();
 
-            g_pXWaylandManager->activateWindow(PLASTWINDOW, false);
+            g_pXWaylandManager->activateWindow(PLASTWINDOW, SeatInput::registry() && SeatInput::registry()->focusesWindow(PLASTWINDOW));
         }
 
         g_pSeatManager->setKeyboardFocus(nullptr);
@@ -199,7 +211,7 @@ void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLS
         PLASTWINDOW->presentation().refreshValues();
 
         if (!pWindow->backend().isX11() || !pWindow->backend().traits().overrideRedirect)
-            g_pXWaylandManager->activateWindow(PLASTWINDOW, false);
+            g_pXWaylandManager->activateWindow(PLASTWINDOW, SeatInput::registry() && SeatInput::registry()->focusesWindow(PLASTWINDOW));
     }
 
     const auto PWINDOWSURFACE = surface ? surface : pWindow->wlSurface()->resource();
@@ -230,6 +242,10 @@ void CFocusState::rawWindowFocus(PHLWINDOW pWindow, eFocusReason reason, SP<CWLS
 }
 
 void CFocusState::rawSurfaceFocus(SP<CWLSurfaceResource> pSurface, PHLWINDOW pWindowOwner) {
+    if (auto seat = SeatInput::current()) {
+        seat->manager()->setKeyboardFocus(pSurface);
+        return;
+    }
     if (g_pSeatManager->m_state.keyboardFocus == pSurface || (pWindowOwner && g_pSeatManager->m_state.keyboardFocus == pWindowOwner->wlSurface()->resource()))
         return; // Don't focus when already focused on this.
 
@@ -269,6 +285,10 @@ void CFocusState::rawSurfaceFocus(SP<CWLSurfaceResource> pSurface, PHLWINDOW pWi
 }
 
 void CFocusState::rawMonitorFocus(PHLMONITOR pMonitor) {
+    if (SeatInput::current())
+        return;
+    if (SeatInput::registry()->isPrivateOutput(pMonitor))
+        return;
     if (m_focusMonitor == pMonitor)
         return;
 
@@ -290,15 +310,15 @@ void CFocusState::rawMonitorFocus(PHLMONITOR pMonitor) {
 }
 
 SP<CWLSurfaceResource> CFocusState::surface() {
-    return m_focusSurface.lock();
+    return SeatInput::current() ? SeatInput::current()->manager()->m_state.keyboardFocus.lock() : m_focusSurface.lock();
 }
 
 PHLWINDOW CFocusState::window() {
-    return m_focusWindow.lock();
+    return SeatInput::current() ? SeatInput::current()->window() : m_focusWindow.lock();
 }
 
 PHLMONITOR CFocusState::monitor() {
-    return m_focusMonitor.lock();
+    return SeatInput::current() ? SeatInput::current()->monitor() : m_focusMonitor.lock();
 }
 
 void CFocusState::resetWindowFocus() {
@@ -307,6 +327,8 @@ void CFocusState::resetWindowFocus() {
 }
 
 bool CFocusState::isWindowActive(PHLWINDOW pWindow) const {
+    if (SeatInput::registry() && SeatInput::registry()->focusesWindow(pWindow))
+        return true;
     const auto FOCUSWINDOW  = m_focusWindow.lock();
     const auto FOCUSSURFACE = m_focusSurface.lock();
 

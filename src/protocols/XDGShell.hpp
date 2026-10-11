@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <hyprutils/math/Edges.hpp>
 #include "WaylandProtocol.hpp"
 #include "xdg-shell.hpp"
@@ -16,6 +17,7 @@ class CXDGSurfaceResource;
 class CXDGToplevelResource;
 class CXDGPopupResource;
 class CSeatGrab;
+class CSeatManager;
 class CWLSeatResource;
 class CWLSurfaceResource;
 class CXDGDialogV1Resource;
@@ -283,6 +285,7 @@ class CXDGWMBase {
 class CXDGShellProtocol : public IWaylandProtocol {
   public:
     CXDGShellProtocol(const wl_interface* iface, const int& ver, const std::string& name);
+    void         forgetSeat(CSeatManager* seat);
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
@@ -300,13 +303,15 @@ class CXDGShellProtocol : public IWaylandProtocol {
     std::vector<SP<CXDGToplevelResource>>   m_toplevels;
     std::vector<SP<CXDGPopupResource>>      m_popups;
 
-    // current popup grab
-    WP<CXDGPopupResource>              m_grabOwner;
-    SP<CSeatGrab>                      m_grab;
-    std::vector<WP<CXDGPopupResource>> m_grabbed;
+    struct SPopupGrab {
+        WP<CXDGPopupResource>              owner;
+        SP<CSeatGrab>                      grab;
+        std::vector<WP<CXDGPopupResource>> popups;
+    };
+    std::unordered_map<CSeatManager*, SPopupGrab> m_grabs;
 
-    void                               addOrStartGrab(SP<CXDGPopupResource> popup);
-    void                               onPopupDestroy(WP<CXDGPopupResource> popup);
+    void                                          addOrStartGrab(SP<CXDGPopupResource> popup, SP<CWLSeatResource> seat, uint32_t serial);
+    void                                          onPopupDestroy(WP<CXDGPopupResource> popup);
 
     friend class CXDGWMBase;
     friend class CXDGPositionerResource;

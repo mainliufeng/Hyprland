@@ -23,6 +23,8 @@
 #include "../surfaceTree/SubsurfaceOwner.hpp"
 #include "WindowBackend.hpp"
 
+class CSeatDesktop;
+
 namespace Config {
     class CWorkspaceRule;
 }
@@ -222,6 +224,7 @@ namespace Desktop::View {
         bool                       onSpecialWorkspace();
         const std::string&         workspaceAddress() const;
         void                       activate(bool force = false);
+        void                       activateForSeat(CSeatDesktop* seat, bool force = false);
         bool                       clampWindowSize(const std::optional<Vector2D> minSize, const std::optional<Vector2D> maxSize);
         float                      getScrollMouse();
         float                      getScrollTouchpad();
@@ -274,8 +277,8 @@ namespace Desktop::View {
         void         onConfigureRequest(const CBox& box);
         void         onGeometryChanged(const CBox& box);
         void         onActivationRequest();
-        void         onMoveRequest();
-        void         onResizeRequest(eBackendResizeEdge edge);
+        void         onMoveRequest(SP<CWLSeatResource> seat);
+        void         onResizeRequest(SP<CWLSeatResource> seat, eBackendResizeEdge edge);
         void         unmanagedSetGeometry(const CBox& box);
         virtual void onInputBlockStateUpdated(bool blocked) override;
         // For hidden windows and stuff

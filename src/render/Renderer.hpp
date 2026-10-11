@@ -45,6 +45,7 @@ class IHLBuffer;
 class CEventLoopTimer;
 class CToplevelExportProtocolManager;
 class CInputManager;
+class CSeatPresentation;
 struct SSessionLockSurface;
 struct SBackdropScope;
 namespace Screenshare {
@@ -118,6 +119,7 @@ namespace Render {
         bool                            isSoftware();
         bool                            isMgpu();
         void                            addWindowToRenderUnfocused(PHLWINDOW window);
+        std::string                     captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path, bool raw = false, bool authorized = false);
         SP<IFramebuffer>                makeSnapshotFB(PHLWINDOW);
         SP<IFramebuffer>                makeSnapshotFB(PHLLS);
         SP<IFramebuffer>                makeSnapshotFB(WP<Desktop::View::CPopup>);
@@ -332,6 +334,8 @@ namespace Render {
         friend class CToplevelExportFrame;
         friend class Screenshare::CScreenshareFrame;
         friend class CInputManager;
+        friend class ::CSeatPresentation;
+        class CSeatPresentation;
         friend class Pointer::CPointerManager;
         friend class Monitor::CMonitor;
         friend class CMonitorFrameScheduler;

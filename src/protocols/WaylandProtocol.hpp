@@ -20,18 +20,20 @@ struct SIWaylandProtocolDestroyWrapper {
 
 class IWaylandProtocol {
   public:
-    IWaylandProtocol(const wl_interface* iface, const int& ver, const std::string& name);
+    IWaylandProtocol(const wl_interface* iface, const int& ver, const std::string& name, PHLMONITOR outputMonitor = nullptr);
     virtual ~IWaylandProtocol();
 
     virtual void                    onDisplayDestroy();
     virtual void                    removeGlobal();
     virtual wl_global*              getGlobal();
+    PHLMONITOR                      outputMonitor() const;
 
     virtual void                    bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) = 0;
 
     SIWaylandProtocolDestroyWrapper m_liDisplayDestroy;
 
   private:
-    std::string m_name;
-    wl_global*  m_global = nullptr;
+    std::string   m_name;
+    PHLMONITORREF m_outputMonitor;
+    wl_global*    m_global = nullptr;
 };

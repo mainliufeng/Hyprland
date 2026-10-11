@@ -1,3 +1,5 @@
+#include "../SeatPresentation.hpp"
+#include "../SeatDesktop.hpp"
 #include "InputManager.hpp"
 #include "../../desktop/view/window/Window.hpp"
 #include "../../protocols/Tablet.hpp"
@@ -107,6 +109,9 @@ static Vector2D transformToActiveRegion(const Vector2D pos, const CBox activeAre
 }
 
 void CInputManager::onTabletAxis(CTablet::SAxisEvent e) {
+    SeatInput::registry()->primaryInput(nullptr);
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     if (!e.tablet->m_enabled)
         return;
 
@@ -181,6 +186,9 @@ void CInputManager::onTabletAxis(CTablet::SAxisEvent e) {
 }
 
 void CInputManager::onTabletTip(CTablet::STipEvent e) {
+    SeatInput::registry()->primaryInput(nullptr);
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     if (!e.tablet->m_enabled) {
         if (!e.in) {
             const auto PTOOL = ensureTabletToolPresent(e.tool);
@@ -219,6 +227,9 @@ void CInputManager::onTabletTip(CTablet::STipEvent e) {
 }
 
 void CInputManager::onTabletButton(CTablet::SButtonEvent e) {
+    SeatInput::registry()->primaryInput(nullptr);
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     if (!e.tablet->m_enabled) {
         if (!e.down) {
             const auto PTOOL = ensureTabletToolPresent(e.tool);
@@ -247,6 +258,9 @@ void CInputManager::onTabletButton(CTablet::SButtonEvent e) {
 }
 
 void CInputManager::onTabletProximity(CTablet::SProximityEvent e) {
+    SeatInput::registry()->primaryInput(nullptr);
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     if (!e.tablet->m_enabled) {
         if (!e.in) {
             const auto PTOOL = ensureTabletToolPresent(e.tool);

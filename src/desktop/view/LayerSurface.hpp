@@ -15,6 +15,7 @@
 #include "animationControllers/LayerSurfaceAnimationController.hpp"
 
 class CLayerShellResource;
+class CSeatDesktop;
 
 namespace Desktop::View {
 
@@ -61,6 +62,7 @@ namespace Desktop::View {
 
         WP<CLayerShellResource>                                   m_layerSurface;
         bool                                                      shouldBlur() const;
+        CSeatDesktop*                                             seatDesktop() const;
 
         LayerFlags                                                m_flags = LAYER_FLAG_ABOVE_FULLSCREEN;
 
@@ -90,6 +92,7 @@ namespace Desktop::View {
         MONITORID                               monitorID();
 
       private:
+        friend class ::CSeatDesktop;
         bool m_mapped = false;
 
         struct {

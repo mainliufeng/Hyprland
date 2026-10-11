@@ -1,4 +1,11 @@
+#include "../managers/SeatPresentation.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatConfiguration.hpp"
 #include "Renderer.hpp"
+#include "../protocols/types/Buffer.hpp"
+#include "../managers/SessionLockManager.hpp"
+#include "../managers/input/InputMethodRelay.hpp"
+#include "../managers/input/InputMethodPopup.hpp"
 #include "../Compositor.hpp"
 #include "../helpers/math/Math.hpp"
 #include <algorithm>
@@ -7,6 +14,9 @@
 #include <cstring>
 #include <drm_mode.h>
 #include <filesystem>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "../config/ConfigValue.hpp"
 #include "../config/ConfigManager.hpp"
 #include "../pointer/cursor/CursorManager.hpp"
@@ -469,6 +479,8 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
 
     Event::bus()->m_events.render.stage.emit({RENDER_PRE_WINDOWS, pMonitor, ctx});
 
+    const auto                desktopSeat   = ctx.m_sceneSeat;
+    const auto                focusedWindow = desktopSeat ? desktopSeat->window() : Desktop::focusState()->window();
     std::vector<PHLWINDOWREF> windows;
     windows.reserve(Desktop::windowState()->windows().size());
 
@@ -496,7 +508,7 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
             continue;
 
         // render active window after all others of this pass
-        if (w == Desktop::focusState()->window()) {
+        if (w == focusedWindow) {
             lastWindow = w.lock();
             continue;
         }
@@ -984,6 +996,10 @@ SP<ITexture> IHyprRenderer::createTexture(const SP<Aquamarine::IBuffer> buffer, 
 void IHyprRenderer::renderLayer(CRenderContext& ctx, PHLLS pLayer, PHLMONITOR pMonitor, const Time::steady_tp& time, bool popups, bool lockscreen) {
     if (!pLayer)
         return;
+    if (ctx.m_sceneSeat && pLayer->seatDesktop() != ctx.m_sceneSeat)
+        return;
+    if (ctx.m_sceneSeat && !ctx.m_renderingSnapshot && SeatInput::presentation()->active() && SeatConfig::manager()->overlay(pLayer, ctx.m_sceneSeat->socketName(), false, true))
+        return;
 
     if (!pLayer->mapped() || !pLayer->acceptsInput() || !pLayer->alphaNonZero())
         return;
@@ -1173,10 +1189,12 @@ void IHyprRenderer::renderAllClientsForWorkspace(CRenderContext& ctx, PHLMONITOR
     if (mode != eSceneMode::MONITOR && !pWorkspace)
         return;
 
-    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !*PSESSIONLOCKXRAY) {
+    const bool privateScene = g_pSessionLockManager->scoped() &&
+        ((ctx.m_renderingSnapshot && g_pSessionLockManager->allowsSeatInput(ctx.m_sceneSeat)) || (!ctx.m_renderingSnapshot && !g_pSessionLockManager->protectsOutput(pMonitor)));
+    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !privateScene && (g_pSessionLockManager->scoped() || !*PSESSIONLOCKXRAY)) {
         // We stop to render workspaces as soon as the lockscreen was sent the "locked" or "finished" (aka denied) event.
         // In addition we make sure to stop rendering workspaces after misc:lockdead_screen_delay has passed.
-        if (g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
+        if (g_pSessionLockManager->scoped() || g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
             return;
     }
 
@@ -1348,6 +1366,16 @@ void IHyprRenderer::renderIME(CRenderContext& ctx, PHLMONITOR pMonitor, const Ti
     for (auto const& imep : g_pInputManager->m_relay.m_inputMethodPopups) {
         if (imep->shouldBeRendered())
             renderIMEPopup(ctx, imep.get(), pMonitor, now);
+    }
+    if (SeatInput::registry()) {
+        for (const auto& seat : SeatInput::registry()->seats()) {
+            if (!seat->inputAllowed() || seat->monitor() != pMonitor || seat->workspace() != pMonitor->m_activeWorkspace)
+                continue;
+            for (const auto& popup : seat->relay()->popups()) {
+                if (popup->shouldBeRendered())
+                    renderIMEPopup(ctx, popup.get(), pMonitor, now);
+            }
+        }
     }
 }
 
@@ -1738,15 +1766,19 @@ void IHyprRenderer::ensureLockTexturesRendered(bool load) {
 void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, const Time::steady_tp& now, const CBox& geometry) {
     TRACY_GPU_ZONE("RenderLockscreen");
 
-    const bool LOCKED = g_pSessionLockManager->isSessionLocked();
+    const bool LOCKED = g_pSessionLockManager->isSessionLocked() && g_pSessionLockManager->protectsOutput(pMonitor);
     if (!LOCKED) {
         ensureLockTexturesRendered(false);
         return;
     }
 
-    const bool RENDERPRIMER = g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied();
-    if (RENDERPRIMER)
+    const bool RENDERPRIMER = g_pSessionLockManager->scoped() || SeatInput::registry()->isPrivateOutput(pMonitor) || g_pSessionLockManager->shallConsiderLockMissing() ||
+        g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied();
+    if (RENDERPRIMER) {
         renderSessionLockPrimer(ctx, pMonitor);
+        if (!ctx.m_renderingSnapshot)
+            g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
+    }
 
     const auto PSLS              = g_pSessionLockManager->getSessionLockSurfaceForMonitor(pMonitor->m_id);
     const bool RENDERLOCKMISSING = (PSLS.expired() || g_pSessionLockManager->clientDenied()) && g_pSessionLockManager->shallConsiderLockMissing();
@@ -1757,7 +1789,11 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
         renderSessionLockMissing(ctx, pMonitor);
     else if (PSLS) {
         renderSessionLockSurface(ctx, PSLS, pMonitor, now);
-        g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
+        if (!ctx.m_renderingSnapshot)
+            g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
+
+        if (g_pSessionLockManager->scoped())
+            return;
 
         // render layers and then their popups for abovelock rule
         for (auto const& lsl : pMonitor->m_layerSurfaceLayers) {
@@ -1775,7 +1811,7 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
 
 void IHyprRenderer::renderSessionLockPrimer(CRenderContext& ctx, PHLMONITOR pMonitor) {
     static auto PSESSIONLOCKXRAY = CConfigValue<Config::INTEGER>("misc:session_lock_xray");
-    if (*PSESSIONLOCKXRAY)
+    if (*PSESSIONLOCKXRAY && !g_pSessionLockManager->scoped())
         return;
 
     CRectPassElement::SRectData data;
@@ -2271,7 +2307,8 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast();
+    const bool presentationSource      = SeatInput::presentation()->active() && SeatInput::presentation()->workspace()->m_monitor == pMonitor;
+    const bool canAttemptDirectScanout = !SeatInput::presentation()->activeFor(pMonitor) && !presentationSource && pMonitor->canAttemptDirectScanoutFast();
     const auto presentationMode =
         shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE : Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC;
     if (pMonitor->m_output->state->state().presentationMode != presentationMode)
@@ -2364,18 +2401,19 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     bool renderCursor = true;
 
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+    if (!SeatInput::presentation()->activeFor(pMonitor) && pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
         renderWindow(ctx, pMonitor->m_solitaryClient.lock(), pMonitor, pMonitor->m_solitaryClient->presentation().renderPresentation(), NOW, false,
                      RENDER_PASS_MAIN /* solitary = no popups */);
     else if (!finalDamage.empty()) {
         const bool    IS_MIRROR = pMonitor->isMirror();
         CMonitorScene scene(pMonitor);
-        scene.draw(ctx, NOW);
+        if (!SeatInput::presentation()->draw(ctx, pMonitor, NOW))
+            scene.draw(ctx, NOW);
 
         if (IS_MIRROR)
             renderCursor = false;
         else {
-            if (pMonitor == Desktop::focusState()->monitor()) {
+            if (!g_pSessionLockManager->isSessionLocked() && pMonitor == Desktop::focusState()->monitor()) {
                 Notification::overlay()->draw(ctx, pMonitor);
                 ErrorOverlay::overlay()->draw(ctx);
             }
@@ -2399,6 +2437,9 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
                     damageBlinkCleanup = 0;
             }
         }
+    } else if (SeatInput::presentation()->activeFor(pMonitor)) {
+        const auto workspace = SeatInput::presentation()->workspace();
+        sendFrameEventsToWorkspace(pMonitor, workspace, NOW);
     } else if (!pMonitor->isMirror()) {
         if (pMonitor->m_activeWorkspace)
             sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
@@ -2406,11 +2447,19 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
             sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
     }
 
-    renderCursor = renderCursor && shouldRenderCursor();
+    renderCursor = renderCursor && shouldRenderCursor() &&
+        (!SeatInput::presentation()->activeFor(pMonitor) || !SeatInput::presentation()->controlling() || SeatInput::presentation()->overlay());
 
     if (renderCursor) {
         TRACY_GPU_ZONE("RenderCursor");
         Pointer::mgr()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
+    }
+
+    if (SeatInput::registry()) {
+        for (const auto& seat : SeatInput::registry()->seats()) {
+            if (seat->inputAllowed() && seat->monitor() == pMonitor->m_self.lock() && seat->workspace() == pMonitor->m_activeWorkspace)
+                seat->pointer()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
+        }
     }
 
     if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
@@ -2731,6 +2780,8 @@ void IHyprRenderer::renderWorkspace(CRenderContext& ctx, PHLWORKSPACE workspace,
 }
 
 void IHyprRenderer::sendFrameEventsToWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now) {
+    if (SeatInput::presentation()->active() && pWorkspace == SeatInput::presentation()->workspace() && pMonitor != SeatInput::presentation()->output())
+        return;
     for (const auto& view : Desktop::View::getViewsForWorkspace(pWorkspace)) {
         if (!view->mapped() || !view->acceptsInput() || !view->resource())
             continue;
@@ -2927,6 +2978,17 @@ void IHyprRenderer::arrangeLayersForMonitor(const MONITORID& monitor) {
     g_layoutManager->invalidateMonitorGeometries(PMONITOR);
 }
 
+// Reuse the target output's normal damage scheduler for a presented scene.
+// No timer, capture or second framebuffer is involved in this routing.
+static void damageNativePresentation(const CBox& box) {
+    if (!SeatInput::presentation() || !SeatInput::presentation()->active())
+        return;
+    const auto source = SeatInput::presentation()->workspace()->m_monitor.lock();
+    const auto target = SeatInput::presentation()->output();
+    if (source && target && source != target && box.overlaps(source->logicalBox()))
+        target->addDamage(CBox{0, 0, INT16_MAX, INT16_MAX});
+}
+
 void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, double y, double scale) {
     if (!pSurface)
         return; // wut?
@@ -2938,6 +3000,8 @@ void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
     }
 
     const auto SURFACE_BOX = WLSURF->getSurfaceBoxGlobal();
+    if (SURFACE_BOX)
+        damageNativePresentation(*SURFACE_BOX);
 
     // hack: schedule frame events
     if (!pSurface->m_current.callbacks.empty() && SURFACE_BOX && !SURFACE_BOX->empty()) {
@@ -2985,6 +3049,8 @@ void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
 void IHyprRenderer::damageWindow(PHLWINDOW pWindow, bool forceFull) {
     CBox       windowBox        = pWindow->getFullWindowBoundingBox();
     const auto PWINDOWWORKSPACE = pWindow->m_workspace;
+    if (SeatInput::presentation() && SeatInput::presentation()->active() && PWINDOWWORKSPACE == SeatInput::presentation()->workspace())
+        damageMonitor(SeatInput::presentation()->output());
     if (PWINDOWWORKSPACE && PWINDOWWORKSPACE->m_renderOffset->isBeingAnimated() && !(pWindow->m_state & WINDOW_STATE_PINNED))
         windowBox.translate(PWINDOWWORKSPACE->m_renderOffset->value());
     windowBox.translate(pWindow->presentation().floatingOffset());
@@ -3008,6 +3074,7 @@ void IHyprRenderer::damageMonitor(PHLMONITOR pMonitor) {
     if (!pMonitor || pMonitor->isMirror())
         return;
 
+    damageNativePresentation(pMonitor->logicalBox());
     CBox damageBox = {0, 0, INT16_MAX, INT16_MAX};
     pMonitor->addDamage(damageBox);
 
@@ -3018,6 +3085,8 @@ void IHyprRenderer::damageMonitor(PHLMONITOR pMonitor) {
 }
 
 void IHyprRenderer::damageBox(const CBox& box, bool skipFrameSchedule) {
+    if (!skipFrameSchedule)
+        damageNativePresentation(box);
     for (auto const& m : State::monitorState()->monitors()) {
         if (m->isMirror())
             continue; // don't damage mirrors traditionally
@@ -3306,6 +3375,122 @@ void IHyprRenderer::addWindowToRenderUnfocused(PHLWINDOW window) {
 
 static DRMFormat snapshotFormat(PHLMONITOR monitor) {
     return monitor->useFP16() ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888;
+}
+
+class CSeatCaptureBuffer : public IHLBuffer {
+  public:
+    explicit CSeatCaptureBuffer(const Vector2D& dimensions) {
+        size = dimensions;
+        m_pixels.resize(sc<size_t>(size.x) * sc<size_t>(size.y) * 4);
+    }
+    Aquamarine::eBufferCapability caps() override {
+        return Aquamarine::BUFFER_CAPABILITY_DATAPTR;
+    }
+    Aquamarine::eBufferType type() override {
+        return Aquamarine::BUFFER_TYPE_SHM;
+    }
+    void update(const CRegion&) override {
+        ;
+    }
+    bool isSynchronous() override {
+        return true;
+    }
+    void sendRelease() override {
+        ;
+    } // CPU destination has no wl_buffer resource.
+    bool good() override {
+        return !m_pixels.empty();
+    }
+    Aquamarine::SSHMAttrs shm() override {
+        return {.success = true, .format = DRM_FORMAT_ARGB8888, .size = size, .stride = sc<int>(size.x) * 4};
+    }
+    std::tuple<uint8_t*, uint32_t, size_t> beginDataPtr(uint32_t) override {
+        return {m_pixels.data(), DRM_FORMAT_ARGB8888, m_pixels.size()};
+    }
+    std::vector<uint8_t> m_pixels;
+};
+
+std::string IHyprRenderer::captureSeatWorkspace(PHLWORKSPACE workspace, CSeatDesktop* seat, const std::string& path, bool raw, bool authorized) {
+    if (g_pSessionLockManager->isSessionLocked() && (!authorized || !g_pSessionLockManager->allowsSeatInput(seat)))
+        return "session is locked";
+    if (m_context.active())
+        return "renderer is busy";
+    const auto monitor = workspace ? workspace->m_monitor.lock() : nullptr;
+    if (!monitor || !monitor->m_enabled || (seat && !seat->viewAvailable()))
+        return "seat view is unavailable";
+    if (!std::filesystem::path(path).is_absolute())
+        return "capture path must be absolute";
+    const auto dimensions  = monitor->m_transformedSize;
+    auto       framebuffer = createFB("seat workspace capture");
+    if (!framebuffer->alloc(dimensions.x, dimensions.y, DRM_FORMAT_ARGB8888))
+        return "capture allocation failed";
+    framebuffer->setImageDescription(monitor->workBufferImageDescription());
+    auto    resources = makeShared<CSceneResources>(createFB("seat workspace blur"));
+    CRegion damage{0, 0, sc<int>(dimensions.x), sc<int>(dimensions.y)};
+    if (!beginRender(monitor, damage, RENDER_MODE_FULL_FAKE, {}, framebuffer, true, {.sceneResources = resources}))
+        return "capture render setup failed";
+    bool              finishing = false;
+    const CScopeGuard cleanup([&] {
+        if (!finishing)
+            abortRender();
+    });
+    m_context.m_sceneSeat            = seat;
+    m_context.m_renderingSnapshot    = true;
+    m_context.m_blockSurfaceFeedback = true;
+    draw(m_context, CClearPassElement::SClearData{CHyprColor(0.08F, 0.08F, 0.08F, 1.F)});
+    startRenderPass(m_context);
+    const auto now = Time::steadyNow();
+    // A private desktop includes its real bar, menus and prompt surface. Shared
+    // workspace captures retain their window-only policy (no primary shell).
+    const auto scene = !seat || SeatInput::registry()->isPrivateOutput(monitor) ? eSceneMode::WORKSPACE_WITH_SHELL : eSceneMode::WORKSPACE_WINDOWS;
+    renderWorkspace(m_context, workspace, now, scene);
+    const bool cursorVisible = !seat || seat->workspace() == workspace;
+    if (seat && cursorVisible)
+        renderDragIcon(m_context, monitor, now);
+    const auto relay = seat ? seat->relay() : &g_pInputManager->m_relay;
+    for (const auto& popup : relay->popups()) {
+        if (cursorVisible && popup->shouldBeRendered())
+            renderIMEPopup(m_context, popup.get(), monitor, now);
+    }
+    if (seat && cursorVisible)
+        seat->pointer()->renderSoftwareCursorsFor(m_context, monitor, now, damage, std::nullopt, true, true);
+    else if (!seat)
+        Pointer::mgr()->renderSoftwareCursorsFor(m_context, monitor, now, damage, std::nullopt, true, true);
+    finishing = true;
+    endRender();
+    auto buffer = makeShared<CSeatCaptureBuffer>(dimensions);
+    if (!framebuffer->readPixels(CHLBufferReference{buffer}))
+        return "capture readback failed";
+    // Only observed hidden workspaces need additional frame callbacks. This
+    // also releases FIFO/suspended clients on a ws without any active seat view.
+    if (SeatInput::registry())
+        SeatInput::registry()->refreshWorkspace(workspace);
+    if (raw) {
+        // Acknowledgement follows the complete write. The consumer owns this
+        // regular runtime buffer and must not reuse it before copying the frame.
+        Hyprutils::OS::CFileDescriptor fd{open(path.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW)};
+        struct stat                    info = {};
+        if (!fd.isValid() || fstat(fd.get(), &info) < 0 || !S_ISREG(info.st_mode) || info.st_uid != getuid() || (info.st_mode & 0077))
+            return "raw capture requires a private regular buffer owned by this user";
+        if (ftruncate(fd.get(), buffer->m_pixels.size()) < 0)
+            return "raw capture resize failed";
+        size_t offset = 0;
+        while (offset < buffer->m_pixels.size()) {
+            const auto written = pwrite(fd.get(), buffer->m_pixels.data() + offset, buffer->m_pixels.size() - offset, offset);
+            if (written < 0 && errno == EINTR)
+                continue;
+            if (written <= 0)
+                return "raw capture write failed";
+            offset += written;
+        }
+        return "ok";
+    }
+    // RPT_EXPORT projects into readback order, so the first CPU row is the top.
+    const size_t      stride = sc<size_t>(dimensions.x) * 4;
+    auto              image  = cairo_image_surface_create_for_data(buffer->m_pixels.data(), CAIRO_FORMAT_ARGB32, dimensions.x, dimensions.y, stride);
+    const CScopeGuard destroyImage([&] { cairo_surface_destroy(image); });
+    const auto        status = cairo_surface_write_to_png(image, path.c_str());
+    return status == CAIRO_STATUS_SUCCESS ? "ok" : std::format("capture PNG failed: {}", cairo_status_to_string(status));
 }
 
 SP<IFramebuffer> IHyprRenderer::makeSnapshotFB(PHLWINDOW pWindow) {

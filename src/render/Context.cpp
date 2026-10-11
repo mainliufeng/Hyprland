@@ -68,6 +68,7 @@ void CRenderContext::reset() {
     m_data                    = {};
     m_data.renderModif.modifs = std::move(modifs);
 
+    m_sceneSeat = nullptr;
     m_pass.clear();
     m_currentPass = nullptr;
     m_mode        = RENDER_MODE_NORMAL;

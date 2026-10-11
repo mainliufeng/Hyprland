@@ -11,10 +11,13 @@
 class CInputMethodKeyboardGrabV2;
 class CInputMethodPopupV2;
 class IKeyboard;
+class CWLSeatResource;
+class CSeatManager;
 
 class CInputMethodV2 {
   public:
-    CInputMethodV2(SP<CZwpInputMethodV2> resource_);
+    CInputMethodV2(SP<CZwpInputMethodV2> resource_, SP<CWLSeatResource> seat);
+    CSeatManager* manager() const;
     ~CInputMethodV2();
 
     struct {
@@ -65,6 +68,7 @@ class CInputMethodV2 {
     wl_client* grabClient();
 
   private:
+    SP<CWLSeatResource>                         m_seat;
     SP<CZwpInputMethodV2>                       m_resource;
     std::vector<WP<CInputMethodKeyboardGrabV2>> m_grabs;
     std::vector<WP<CInputMethodPopupV2>>        m_popups;

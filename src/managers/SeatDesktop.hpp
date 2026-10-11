@@ -1,0 +1,214 @@
+#pragma once
+
+#include "../helpers/memory/Memory.hpp"
+#include "../helpers/signal/Signal.hpp"
+#include "../helpers/math/Math.hpp"
+#include "../desktop/DesktopTypes.hpp"
+#include "../devices/IKeyboard.hpp"
+#include "../devices/IPointer.hpp"
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+
+class IWaylandProtocol;
+class CXCursorManager;
+class CInputMethodRelay;
+class CSeatManager;
+class CSeatClientRegistry;
+class CWaylandSocket;
+class CSeatPresentation;
+namespace Keybinds {
+    class CKeybindManager;
+}
+namespace Config::Actions {
+    class CActionState;
+}
+class CWLSeatProtocol;
+class CWLSurfaceResource;
+class CVirtualKeyboardV1Resource;
+class CVirtualPointerV1Resource;
+class CEventLoopTimer;
+namespace Layout::Supplementary {
+    class CDragStateController;
+}
+struct wl_global;
+struct wl_client;
+namespace Desktop::History {
+    class CWorkspaceHistoryTracker;
+}
+namespace State::Workspace {
+    struct STarget;
+}
+namespace Desktop::View {
+    class CWLSurface;
+}
+namespace Pointer {
+    class CPointerManager;
+}
+namespace Render {
+    class CRenderContext;
+}
+
+// A desktop seat owns its focus and cursor. The default seat keeps the existing
+// input policy; secondary seats never enter that policy through a global swap.
+class CSeatDesktop {
+  public:
+    CSeatDesktop(const std::string& name, PHLMONITOR monitor);
+    ~CSeatDesktop();
+
+    CSeatManager*                                manager() const;
+    CInputMethodRelay*                           relay() const;
+    CWLSeatProtocol*                             protocol() const;
+    Pointer::CPointerManager*                    pointer() const;
+    PHLMONITOR                                   monitor() const;
+    PHLWORKSPACE                                 workspace() const;
+    State::Workspace::STarget                    previousWorkspaceTarget(PHLMONITOR restrict = nullptr) const;
+    PHLWINDOW                                    window() const;
+    bool                                         active() const;
+    bool                                         inputAllowed() const;
+    bool                                         viewAvailable() const;
+    bool                                         paused() const;
+    bool                                         scopeExemptionAllowed() const;
+    void                                         setScopeExemptionAllowed(bool allow);
+    void                                         setCaptureGrant(const std::string& grant);
+    bool                                         captureGranted(const std::string& grant) const;
+    uint64_t                                     controlGeneration() const;
+    uint64_t                                     viewEpoch() const;
+    uint64_t                                     focusEpoch() const;
+    std::string                                  inputFocusToken() const;
+    void                                         setPaused(bool paused, bool composedKeyboard = false);
+    void                                         retire();
+    const std::string&                           socketName() const;
+    bool                                         ownsClient(const wl_client* client) const;
+    bool                                         allowsInputSource(wl_client* client);
+
+    Layout::Supplementary::CDragStateController* dragController() const;
+    void                                         setCursorShape(const std::string& name);
+
+    Keybinds::CKeybindManager*                   keybinds() const;
+    UP<Config::Actions::CActionState>&           actionState();
+    void                                         attachKeyboard(SP<IKeyboard> keyboard);
+    void                                         attachPointer(SP<IPointer> pointer);
+    bool                                         canFocusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr, bool allowFullscreenBlocked = false) const;
+    void                                         focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr);
+    void                                         refocus(uint32_t timeMs = 0, bool keyboard = false);
+    void                                         restoreKeyboardFocus();
+    std::string                                  reserveWorkspace(const std::string& name);
+    std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false);
+    std::vector<uint32_t>                        pressedKeys() const;
+    const std::vector<SP<IKeyboard>>&            keyboards() const;
+
+  private:
+    friend class CSeatPresentation;
+    void                                                        updateCapabilities();
+    void                                                        listenWorkspaceMonitorChanges();
+    void                                                        keyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboard> keyboard, bool native = false);
+    void                                                        keyboardModifiers(SP<IKeyboard> keyboard, bool native = false);
+    void                                                        move(const IPointer::SMotionEvent& event);
+    void                                                        warp(const IPointer::SMotionAbsoluteEvent& event);
+    void                                                        button(const IPointer::SButtonEvent& event, IPointer* device);
+    void                                                        axis(const IPointer::SAxisEvent& event);
+
+    UP<Keybinds::CKeybindManager>                               m_keybinds;
+    UP<Config::Actions::CActionState>                           m_actionState;
+    UP<CWLSeatProtocol>                                         m_protocol;
+    UP<CSeatManager>                                            m_manager;
+    UP<CInputMethodRelay>                                       m_relay;
+    UP<Pointer::CPointerManager>                                m_pointer;
+    SP<Desktop::View::CWLSurface>                               m_cursorSurface;
+    UP<CXCursorManager>                                         m_cursorTheme;
+    UP<Layout::Supplementary::CDragStateController>             m_dragController;
+    PHLMONITORREF                                               m_monitor;
+    PHLMONITORREF                                               m_homeOutput;
+    PHLWORKSPACE                                                m_workspace;
+    UP<Desktop::History::CWorkspaceHistoryTracker>              m_workspaceHistory;
+    std::vector<PHLWORKSPACE>                                   m_reservedWorkspaces;
+    PHLWINDOWREF                                                m_window;
+    bool                                                        m_nativeControl = false;
+    std::vector<uint32_t>                                       m_nativeKeys;
+    bool                                                        m_active                = true;
+    bool                                                        m_composedKeyboard      = false;
+    bool                                                        m_paused                = false;
+    bool                                                        m_managedControl        = false;
+    bool                                                        m_scopeExemptionAllowed = false;
+    uint64_t                                                    m_controlGeneration     = 1;
+    uint64_t                                                    m_viewEpoch             = 1;
+    uint64_t                                                    m_focusEpoch            = 1;
+    uint64_t                                                    m_revokedThrough        = 0;
+    std::unordered_map<IHID*, std::vector<CHyprSignalListener>> m_deviceListeners;
+    std::unordered_map<IHID*, uint64_t>                         m_deviceGenerations;
+
+    UP<CWaylandSocket>                                          m_socket;
+    std::string                                                 m_socketName;
+    std::string                                                 m_captureGrant;
+    std::vector<SP<IKeyboard>>                                  m_keyboards;
+    std::vector<SP<IPointer>>                                   m_pointers;
+    std::vector<uint32_t>                                       m_buttons;
+    std::unordered_map<IPointer*, std::vector<uint32_t>>        m_deviceButtons;
+    CHyprSignalListener                                         m_workspaceMonitorChanged;
+    CHyprSignalListener                                         m_windowUnmap;
+    CHyprSignalListener                                         m_windowDestroy;
+    std::vector<CHyprSignalListener>                            m_listeners;
+};
+
+class IHID;
+
+class CSeatDesktopRegistry {
+  public:
+    uint64_t primaryGeneration() const;
+    bool     primaryPaused() const;
+    void     setPrimaryPaused(bool paused, pid_t owner = 0);
+    bool     primaryInput(IHID* device);
+    uint64_t primaryClientGeneration(wl_client* client);
+    void     setPrimaryCaptureGrant(const std::string& grant);
+    bool     primaryCaptureGranted(const std::string& grant) const;
+    CSeatDesktopRegistry();
+    ~CSeatDesktopRegistry();
+    std::string                          create(const std::string& name, PHLMONITOR monitor);
+    std::string                          remove(const std::string& name);
+    CSeatDesktop*                        forName(const std::string& name) const;
+    CSeatDesktop*                        forManager(CSeatManager* manager) const;
+    CSeatDesktop*                        forClient(const wl_client* client) const;
+    void                                 registerClient(wl_client* client, CSeatDesktop* seat);
+    const std::string&                   managementDisplay();
+    uint64_t                             clientId(const wl_client* client) const;
+    uint64_t                             lastClientId() const;
+    bool                                 allowsGlobal(const wl_client* client, const wl_global* global) const;
+    void                                 refreshWorkspace(PHLWORKSPACE workspace);
+    bool                                 isPrivateOutput(PHLMONITOR monitor) const;
+    std::string                          registerPrivateOutput(PHLMONITOR monitor);
+    std::string                          createPrivateOutput(const std::string& name);
+    bool                                 isSeatGlobal(const wl_global* global) const;
+    bool                                 usesWorkspace(PHLWORKSPACE workspace) const;
+    bool                                 focusesWindow(PHLWINDOW window) const;
+    const std::vector<UP<CSeatDesktop>>& seats() const;
+    std::string                          windowIdentity(PHLWINDOW window);
+
+  private:
+    // Retain retired seats until their socket clients disconnect: Wayland
+    // children may outlive wl_seat and removal of a registry global.
+    void                                                            collectRetired();
+    UP<CSeatClientRegistry>                                         m_clients;
+    UP<CWaylandSocket>                                              m_managementSocket;
+    std::string                                                     m_managementDisplay;
+    std::vector<UP<CSeatDesktop>>                                   m_seats;
+    UP<IWaylandProtocol>                                            m_sharedPrimarySeat;
+    std::vector<PHLMONITORREF>                                      m_privateOutputs;
+    std::unordered_set<std::string>                                 m_pendingPrivateOutputs;
+    CHyprSignalListener                                             m_privateOutputAdded;
+    SP<CEventLoopTimer>                                             m_frameTimer;
+    uint64_t                                                        m_primaryGeneration     = 1;
+    uint64_t                                                        m_primaryRevokedThrough = 0;
+    std::unordered_map<uint64_t, uint64_t>                          m_primaryClientGenerations;
+    CHyprSignalListener                                             m_clientRemoved;
+    bool                                                            m_primaryPaused = true;
+    pid_t                                                           m_primaryOwner  = 0;
+    std::string                                                     m_primaryCaptureGrant;
+    uint64_t                                                        m_nextWindowIdentity = 0;
+    std::unordered_map<void*, std::pair<PHLWINDOWREF, std::string>> m_windowIdentities;
+};
+
+namespace SeatInput {
+    UP<CSeatDesktopRegistry>& registry();
+}

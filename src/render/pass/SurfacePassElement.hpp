@@ -64,6 +64,7 @@ class CSurfacePassElement : public IPassElement {
     virtual CRegion             opaqueRegion(Render::CRenderContext& ctx);
     virtual void                discard(Render::CRenderContext& ctx);
     CRegion                     visibleRegion(Render::CRenderContext& ctx, bool& cancel);
+    bool                        ownsFrameFeedback(Render::CRenderContext& ctx) const;
 
     virtual const char*         passName() {
         return "CSurfacePassElement";

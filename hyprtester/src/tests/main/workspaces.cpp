@@ -6,6 +6,7 @@
 #include <hyprutils/utils/ScopeGuard.hpp>
 #include "../shared.hpp"
 
+#include <array>
 #include <chrono>
 #include <format>
 #include <string>
@@ -1194,9 +1195,18 @@ SUBTEST(luaSetWorkspaceUnfocusedRelative) {
 }
 
 TEST_CASE(luaSetWorkspace) {
+    static constexpr const char* SECOND_MONITOR = "HEADLESS-3";
+
+    CScopeGuard                  guard = {[&]() {
+        Tests::killAllWindows();
+        if (getFromSocket("/monitors all").contains(SECOND_MONITOR))
+            getFromSocket(std::format("/output remove {}", SECOND_MONITOR));
+    }};
+
     // add a new monitor
     NLog::log("{}Adding a new monitor", Colors::YELLOW);
-    ASSERT(getFromSocket("/output create headless HEADLESS-3"), "ok");
+    ASSERT(getFromSocket(std::format("/output create headless {}", SECOND_MONITOR)), "ok");
+    ASSERT(waitForMonitorListed(SECOND_MONITOR, true), true);
 
     // should take workspace 2
     {
@@ -1211,13 +1221,13 @@ TEST_CASE(luaSetWorkspace) {
     SPAWN_KITTY("ws1");
     {
         auto str = getFromSocket("/activewindow");
-        ASSERT_CONTAINS(str, "monitor: 1");
+        ASSERT(getFromSocket("/repl hl.get_active_window().monitor == hl.get_monitor('HEADLESS-2')"), "true");
         ASSERT_CONTAINS(str, "workspace: 1 (1)");
     }
 
     // for use in subtests
-    OK(getFromSocket("/eval M1 = hl.get_monitors()[1]"));
-    OK(getFromSocket("/eval M2 = hl.get_monitors()[2]"));
+    OK(getFromSocket("/eval M1 = hl.get_monitor('HEADLESS-2')"));
+    OK(getFromSocket(std::format("/eval M2 = hl.get_monitor('{}')", SECOND_MONITOR)));
 
     // order very much matters for these
     CALL_SUBTEST(luaSetWorkspaceCreate);
@@ -1229,7 +1239,8 @@ TEST_CASE(luaSetWorkspace) {
 
     // clean up
     Tests::killAllWindows();
-    OK(getFromSocket("/output remove HEADLESS-3"));
+    OK(getFromSocket(std::format("/output remove {}", SECOND_MONITOR)));
+    ASSERT(waitForMonitorListed(SECOND_MONITOR, false), true);
 }
 
 TEST_CASE(luaSetSpecialWorkspace) {
@@ -1317,7 +1328,48 @@ SUBTEST(switchWorkspaceAndCheckActiveWindowFocusIsLostAndRestored) {
     EXPECT("Invalid", resp2);
     OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = \"previous\" })"));
     resp2 = getFromSocket("/activewindow");
-    ASSERT(resp1, resp2);
+    ASSERT_NOT("Invalid", resp2);
+
+    // The shell may update its title while its workspace is hidden. Verify the
+    // focused window's identity and state independently of that metadata.
+    static constexpr std::array attributes = {
+        "stableID",
+        "pid",
+        "class",
+        "initialClass",
+        "initialTitle",
+        "workspace",
+        "mapped",
+        "hidden",
+        "visible",
+        "acceptsInput",
+        "at",
+        "size",
+        "floating",
+        "monitor",
+        "xwayland",
+        "pinned",
+        "pinFullscreened",
+        "fullscreen",
+        "fullscreenClient",
+        "fullscreenHandler",
+        "allowedOverFullscreen",
+        "grouped",
+        "tags",
+        "swallowing",
+        "focusHistoryID",
+        "inhibitingIdle",
+        "xdgTag",
+        "xdgDescription",
+        "contentType",
+        "tearingHint",
+    };
+    for (const auto attribute : attributes) {
+        const auto before = Tests::getAttribute(resp1, attribute);
+        const auto after  = Tests::getAttribute(resp2, attribute);
+        ASSERT_NOT(before, "Wrong window attribute");
+        ASSERT(before, after);
+    }
 }
 
 TEST_CASE(workspaceSwitchUnfocusesWindowFromOldWorkspace) {

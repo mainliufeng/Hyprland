@@ -1,3 +1,5 @@
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatPresentation.hpp"
 #include "Monitor.hpp"
 #include "../desktop/view/window/WindowEffectsController.hpp"
 #include "../desktop/view/window/WindowPresentation.hpp"
@@ -203,10 +205,15 @@ void CMonitor::onConnect(bool noRule) {
         auto mon = m_self.lock();
         if (!isMirror() && !g_pHyprRenderer->shouldRenderMonitor(mon)) {
             auto const NOW = Time::steadyNow();
-            if (m_activeWorkspace)
-                g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeWorkspace, NOW);
-            if (m_activeSpecialWorkspace)
-                g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeSpecialWorkspace, NOW);
+            if (SeatInput::presentation()->activeFor(mon)) {
+                const auto workspace = SeatInput::presentation()->workspace();
+                g_pHyprRenderer->sendFrameEventsToWorkspace(mon, workspace, NOW);
+            } else {
+                if (m_activeWorkspace)
+                    g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeWorkspace, NOW);
+                if (m_activeSpecialWorkspace)
+                    g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeSpecialWorkspace, NOW);
+            }
         }
 
         m_frameScheduler->onPresented();
@@ -395,6 +402,9 @@ void CMonitor::onDisconnect(bool destroy) {
 
     LOG(Log::DEBUG, "onDisconnect called for {}", m_name);
 
+    // A private seat output never owns the primary cursor or focus. Remember
+    // its role before disconnect listeners retire its seats and output policy.
+    const bool PRIVATE_OUTPUT = SeatInput::registry() && SeatInput::registry()->isPrivateOutput(m_self.lock());
     m_events.disconnect.emit();
     if (g_pHyprRenderer && g_pHyprRenderer->glBackend())
         g_pHyprRenderer->glBackend()->destroyMonitorResources(m_self);
@@ -402,7 +412,7 @@ void CMonitor::onDisconnect(bool destroy) {
     // Cleanup everything. Move windows back, snap cursor, shit.
     PHLMONITOR BACKUPMON = nullptr;
     for (auto const& m : State::monitorState()->monitors()) {
-        if (m.get() != this) {
+        if (m.get() != this && (!SeatInput::registry() || !SeatInput::registry()->isPrivateOutput(m))) {
             BACKUPMON = m;
             break;
         }
@@ -446,13 +456,15 @@ void CMonitor::onDisconnect(bool destroy) {
 
     State::Workspace::monitorDisconnected(m_self.lock());
 
-    if (BACKUPMON) {
-        // snap cursor
-        Pointer::pointerController()->warpTo(BACKUPMON->m_position + BACKUPMON->m_transformedSize / 2.F, true);
-    } else {
-        Desktop::focusState()->surface().reset();
-        Desktop::focusState()->window().reset();
-        Desktop::focusState()->monitor().reset();
+    if (!PRIVATE_OUTPUT) {
+        // Pointer coordinates are logical, including on HiDPI outputs.
+        if (BACKUPMON)
+            Pointer::pointerController()->warpTo(BACKUPMON->m_position + BACKUPMON->m_size / 2.F, true);
+        else {
+            Desktop::focusState()->surface().reset();
+            Desktop::focusState()->window().reset();
+            Desktop::focusState()->monitor().reset();
+        }
     }
 
     if (m_activeWorkspace)
@@ -2604,7 +2616,10 @@ bool CMonitorState::commit() {
 
     ensureBufferPresent();
 
-    bool ret = m_owner->m_output->commit();
+    const bool enabled = m_owner->m_output->state->state().enabled;
+    bool       ret     = m_owner->m_output->commit();
+    if (ret && g_pSessionLockManager)
+        g_pSessionLockManager->onOutputCommit(m_owner->m_self.lock(), enabled);
     return ret;
 }
 

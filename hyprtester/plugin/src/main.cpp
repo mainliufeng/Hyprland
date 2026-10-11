@@ -7,6 +7,7 @@
 #include <cstring>
 #include <vector>
 #include <array>
+#include <set>
 #include <tuple>
 
 #define private   public
@@ -881,12 +882,34 @@ class CTestMouse : public IPointer {
         return nullptr;
     }
 
+    void sendButton(uint32_t button, bool pressed) {
+        if (pressed)
+            m_heldButtons.insert(button);
+        else
+            m_heldButtons.erase(button);
+
+        m_pointerEvents.button.emit(IPointer::SButtonEvent{
+            .timeMs = sc<uint32_t>(Time::millis(Time::steadyNow())),
+            .button = button,
+            .state  = pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED,
+            .mouse  = true,
+        });
+    }
+
+    void releaseButtons() {
+        const auto held = m_heldButtons;
+        for (const auto button : held)
+            sendButton(button, false);
+    }
+
     void destroy() {
+        releaseButtons();
         m_events.destroy.emit();
     }
 
   private:
-    bool m_isVirtual = false;
+    bool               m_isVirtual = false;
+    std::set<uint32_t> m_heldButtons;
 };
 
 class CKeyboardEventRecorder : public IKeyboardEventHandler {
@@ -1219,12 +1242,7 @@ static SDispatchResult click(std::string in) {
 
     LOG(Log::DEBUG, "tester: mouse button {} state {}", button, pressed);
 
-    g_mouse->m_pointerEvents.button.emit(IPointer::SButtonEvent{
-        .timeMs = sc<uint32_t>(Time::millis(Time::steadyNow())),
-        .button = button,
-        .state  = pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED,
-        .mouse  = true,
-    });
+    g_mouse->sendButton(button, pressed);
 
     return {};
 }
@@ -1701,6 +1719,14 @@ static int luaClick(lua_State* L) {
     return luaResult(L, ::click(std::format("{},{}", button, pressed)));
 }
 
+static int luaResetMouseButtons(lua_State* L) {
+    if (!g_mouse)
+        return luaResult(L, {.success = false, .error = "Test mouse is not active"});
+
+    g_mouse->releaseButtons();
+    return luaResult(L, {});
+}
+
 static int luaKeybind(lua_State* L) {
     const auto press    = (int)luaL_checkinteger(L, 1);
     const auto modifier = (int)luaL_checkinteger(L, 2);
@@ -1847,6 +1873,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     addLuaFn("expect_cursor_zoom", ::luaExpectCursorZoom);
     addLuaFn("scroll", ::luaScroll);
     addLuaFn("click", ::luaClick);
+    addLuaFn("reset_mouse_buttons", ::luaResetMouseButtons);
     addLuaFn("keybind", ::luaKeybind);
     addLuaFn("keybind2", ::luaKeybind2);
     addLuaFn("keybind_modmask", ::luaKeybindMask);

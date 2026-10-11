@@ -9,12 +9,17 @@
 
 class CExtDataControlManagerResource;
 class CExtDataSource;
+class CWLSeatResource;
+class CSeatManager;
+
 class CExtDataDevice;
 class CExtDataOffer;
 
 class CExtDataOffer {
   public:
     CExtDataOffer(SP<CExtDataControlOfferV1> resource_, SP<IDataSource> source);
+
+    CSeatManager*   m_seat = nullptr;
 
     bool            good();
     void            sendData();
@@ -54,7 +59,8 @@ class CExtDataSource : public IDataSource {
 
 class CExtDataDevice {
   public:
-    CExtDataDevice(SP<CExtDataControlDeviceV1> resource_);
+    CExtDataDevice(SP<CExtDataControlDeviceV1> resource_, SP<CWLSeatResource> seat);
+    CSeatManager*      manager() const;
 
     bool               good();
     wl_client*         client();
@@ -67,6 +73,7 @@ class CExtDataDevice {
     WP<CExtDataDevice> self;
 
   private:
+    SP<CWLSeatResource>         m_seat;
     SP<CExtDataControlDeviceV1> m_resource;
     wl_client*                  m_client = nullptr;
 
@@ -105,7 +112,7 @@ class CExtDataDeviceProtocol : public IWaylandProtocol {
     std::vector<SP<CExtDataOffer>>                  m_offers;
 
     //
-    void setSelection(SP<IDataSource> source, bool primary);
+    void setSelection(SP<IDataSource> source, bool primary, CSeatManager* seat = nullptr);
     void sendSelectionToDevice(SP<CExtDataDevice> dev, SP<IDataSource> sel, bool primary);
 
     //

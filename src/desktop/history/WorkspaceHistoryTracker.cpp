@@ -17,7 +17,10 @@ SP<CWorkspaceHistoryTracker> History::workspaceTracker() {
     return tracker;
 }
 
-CWorkspaceHistoryTracker::CWorkspaceHistoryTracker() {
+CWorkspaceHistoryTracker::CWorkspaceHistoryTracker(bool observeGlobalEvents) {
+    if (!observeGlobalEvents)
+        return;
+
     static auto P = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE workspace) { track(workspace); });
 
     static auto P1 = Event::bus()->m_events.monitor.focused.listen([this](PHLMONITOR mon) {

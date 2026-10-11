@@ -6,6 +6,8 @@
 #include "../../config/ConfigValue.hpp"
 #include "../../output/Monitor.hpp"
 #include "../../managers/fullscreen/FullscreenController.hpp"
+#include "../../managers/SeatActionContext.hpp"
+#include "../../managers/SeatDesktop.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +20,16 @@ using namespace Desktop::View;
 
 CWindowQuery::CWindowQuery(const CWindowState& state) : m_state(state) {
     ;
+}
+
+static bool isWorkspaceVisibleForQuery(PHLWORKSPACE workspace) {
+    if (!workspace)
+        return false;
+
+    if (const auto seat = SeatInput::current())
+        return workspace == seat->workspace();
+
+    return workspace->visible();
 }
 
 PHLWINDOW CWindowQuery::inDirection(PHLWINDOW window, Math::eDirection direction) const {
@@ -96,7 +108,8 @@ PHLWINDOW CWindowQuery::inDirection(const SWindowDirectionQuery& query) const {
 
         auto find = [&]() {
             for (auto const& w : m_state.windows()) {
-                if (w == query.ignoreWindow || !w->m_workspace || !w->mapped() || (!Fullscreen::controller()->isFullscreen(w) && w->isFloating()) || !w->m_workspace->visible())
+                if (w == query.ignoreWindow || !w->m_workspace || !w->mapped() || (!Fullscreen::controller()->isFullscreen(w) && w->isFloating()) ||
+                    !isWorkspaceVisibleForQuery(w->m_workspace))
                     continue;
 
                 if (w->isHidden())
@@ -221,7 +234,7 @@ PHLWINDOW CWindowQuery::inDirection(const SWindowDirectionQuery& query) const {
 
         for (auto const& w : m_state.windows()) {
             if (w == query.ignoreWindow || !w->mapped() || !w->m_workspace || !w->acceptsInput() || (!Fullscreen::controller()->isFullscreen(w) && !w->isFloating()) ||
-                !w->m_workspace->visible())
+                !isWorkspaceVisibleForQuery(w->m_workspace))
                 continue;
 
             if (query.workspace->m_monitor == w->m_monitor && query.workspace != w->m_workspace)
@@ -258,7 +271,7 @@ PHLWINDOW CWindowQuery::inDirection(const SWindowDirectionQuery& query) const {
 
 template <typename WINDOWPTR>
 static bool isWorkspaceMatches(WINDOWPTR pWindow, const WINDOWPTR w, bool anyWorkspace) {
-    return anyWorkspace ? w->m_workspace && w->m_workspace->visible() : w->m_workspace == pWindow->m_workspace;
+    return anyWorkspace ? isWorkspaceVisibleForQuery(w->m_workspace) : w->m_workspace == pWindow->m_workspace;
 }
 
 template <typename WINDOWPTR>

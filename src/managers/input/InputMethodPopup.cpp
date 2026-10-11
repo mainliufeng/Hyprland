@@ -8,7 +8,7 @@
 #include "../../state/MonitorState.hpp"
 #include "../../render/Renderer.hpp"
 
-CInputPopup::CInputPopup(SP<CInputMethodPopupV2> popup_) : m_popup(popup_) {
+CInputPopup::CInputPopup(SP<CInputMethodPopupV2> popup_, CInputMethodRelay* relay) : m_relay(relay), m_popup(popup_) {
     m_listeners.commit  = popup_->m_events.commit.listen([this] { onCommit(); });
     m_listeners.map     = popup_->m_events.map.listen([this] { onMap(); });
     m_listeners.unmap   = popup_->m_events.unmap.listen([this] { onUnmap(); });
@@ -18,7 +18,7 @@ CInputPopup::CInputPopup(SP<CInputMethodPopupV2> popup_) : m_popup(popup_) {
 }
 
 SP<Desktop::View::CWLSurface> CInputPopup::queryOwner() {
-    const auto FOCUSED = g_pInputManager->m_relay.getFocusedTextInput();
+    const auto FOCUSED = m_relay->getFocusedTextInput();
 
     if (!FOCUSED)
         return nullptr;
@@ -27,7 +27,7 @@ SP<Desktop::View::CWLSurface> CInputPopup::queryOwner() {
 }
 
 void CInputPopup::onDestroy() {
-    g_pInputManager->m_relay.removePopup(this);
+    m_relay->removePopup(this);
 }
 
 void CInputPopup::onMap() {
@@ -82,7 +82,7 @@ void CInputPopup::updateBox() {
         return;
 
     const auto OWNER      = queryOwner();
-    const auto PFOCUSEDTI = g_pInputManager->m_relay.getFocusedTextInput();
+    const auto PFOCUSEDTI = m_relay->getFocusedTextInput();
 
     if (!PFOCUSEDTI)
         return;
@@ -135,7 +135,7 @@ void CInputPopup::updateBox() {
 
     damageSurface();
 
-    if (const auto PM = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run(); PM && PM->m_id != m_lastMonitor) {
+    if (const auto PM = pMonitor; PM && PM->m_id != m_lastMonitor) {
         const auto PML = State::monitorState()->query().id(m_lastMonitor).run();
 
         if (PML)
@@ -173,6 +173,6 @@ bool CInputPopup::shouldBeRendered() {
     if (!OWNER)
         return false;
 
-    const auto KB_FOCUS = g_pSeatManager->m_state.keyboardFocus;
+    const auto KB_FOCUS = m_relay->focus();
     return KB_FOCUS && KB_FOCUS == OWNER->resource();
 }

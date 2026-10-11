@@ -2,6 +2,8 @@
 
 #include "../devices/IKeyboard.hpp"
 #include "../managers/SeatManager.hpp"
+#include "../managers/SeatActionContext.hpp"
+#include "../managers/SeatDesktop.hpp"
 
 #include <hyprutils/string/String.hpp>
 
@@ -57,7 +59,8 @@ std::expected<uint32_t, std::string> CResolver::resolveKeycode(const std::string
 
     const auto KEYSYM = xkb_keysym_from_name(key.c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
 
-    const auto KB = g_pSeatManager->m_keyboard;
+    const auto SEAT = SeatInput::current();
+    const auto KB   = SEAT ? SEAT->manager()->m_keyboard : g_pSeatManager->m_keyboard;
     if (!KB)
         return std::unexpected("no keyboard");
 

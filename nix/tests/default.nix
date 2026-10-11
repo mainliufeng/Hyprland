@@ -79,6 +79,7 @@ in
       # Run gtests
       print("Running gtests")
       exit_status, _out = machine.execute("su - alice -c 'hyprland_gtests 2>&1 | tee /tmp/gtestslog; exit ''${PIPESTATUS[0]}'")
+      gtests_exit_status = exit_status
       machine.execute(f'echo {exit_status} > /tmp/exit_status_gtests')
 
       # Print logs for visibility in CI
@@ -105,6 +106,8 @@ in
 
       # Finally - shutdown
       machine.shutdown()
+      assert gtests_exit_status == 0, f"GTest suite failed: {gtests_exit_status}"
+      assert exit_status == 0, f"Hyprtester suite failed: {exit_status}"
     '';
   };
 }

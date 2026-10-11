@@ -13,6 +13,8 @@
 #include "../../../workspace/WorkspaceUtils.hpp"
 #include "../../../desktop/rule/windowRule/WindowRule.hpp"
 #include "../../../keybinds/Resolver.hpp"
+#include "../../../managers/SeatActionContext.hpp"
+#include "../../../managers/SeatDesktop.hpp"
 #include "config/shared/actions/ConfigActions.hpp"
 
 using namespace Config;
@@ -1207,7 +1209,8 @@ static int dsp_moveCurrentWorkspaceToMonitor(lua_State* L) {
     const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
     if (!PMONITOR)
         return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
-    const auto PCURRENTWORKSPACE = Desktop::focusState()->monitor()->m_activeWorkspace;
+    const auto SEAT              = SeatInput::current();
+    const auto PCURRENTWORKSPACE = SEAT ? SEAT->workspace() : Desktop::focusState()->monitor()->m_activeWorkspace;
     if (!PCURRENTWORKSPACE)
         return Internal::dispatcherError(L, "Invalid workspace", ERR, C_INVARG);
     return Internal::checkResult(L, CA::moveToMonitor(PCURRENTWORKSPACE, PMONITOR));

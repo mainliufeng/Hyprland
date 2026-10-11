@@ -10,8 +10,11 @@
 
 constexpr size_t MAX_SERIAL_STORE_LEN = 100;
 
+class CSeatDesktop;
+class CSeatManager;
 class CWLSurfaceResource;
 class CWLSeatResource;
+class CWLSeatProtocol;
 class IPointer;
 
 class IKeyboardEventHandler {
@@ -65,6 +68,7 @@ class CSeatGrab {
     bool m_pointer  = false;
 
   private:
+    CSeatManager*                       m_owner = nullptr;
     std::vector<WP<CWLSurfaceResource>> m_surfs;
     std::function<void()>               m_onEnd;
     friend class CSeatManager;
@@ -72,7 +76,11 @@ class CSeatGrab {
 
 class CSeatManager {
   public:
-    CSeatManager();
+    explicit CSeatManager(CWLSeatProtocol* protocol = nullptr);
+
+    CWLSeatProtocol*           protocol() const;
+    CSeatDesktop*              m_desktop = nullptr;
+    bool                       hasCapability(eHIDCapabilityType cap) const;
 
     void                       updateCapabilities(uint32_t capabilities); // in IHID caps
 
@@ -168,7 +176,7 @@ class CSeatManager {
     };
 
     struct SSeatResourceContainer {
-        SSeatResourceContainer(SP<CWLSeatResource>);
+        SSeatResourceContainer(SP<CWLSeatResource>, CSeatManager* owner);
 
         WP<CWLSeatResource>               resource;
         uint32_t                          enterSerial = 0; // remember this forever
@@ -193,8 +201,10 @@ class CSeatManager {
         CHyprSignalListener touchSurfaceDestroy;
     } m_listeners;
 
-    Vector2D m_lastLocalCoords;
-    int      m_touchLocks = 0; // we assume there aint like 20 touch devices at once...
+    CWLSeatProtocol* m_protocol = nullptr;
+
+    Vector2D         m_lastLocalCoords;
+    int              m_touchLocks = 0; // we assume there aint like 20 touch devices at once...
 
     friend struct SSeatResourceContainer;
     friend class CSeatGrab;

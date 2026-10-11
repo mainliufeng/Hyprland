@@ -11,7 +11,7 @@
 namespace Desktop::History {
     class CWorkspaceHistoryTracker {
       public:
-        CWorkspaceHistoryTracker();
+        explicit CWorkspaceHistoryTracker(bool observeGlobalEvents = true);
         ~CWorkspaceHistoryTracker() = default;
 
         CWorkspaceHistoryTracker(const CWorkspaceHistoryTracker&) = delete;
@@ -28,11 +28,11 @@ namespace Desktop::History {
 
         const SHistoryEntry previousWorkspace(PHLWORKSPACE ws, PHLMONITOR restrict);
         void                workspaceIdentityChanged(PHLWORKSPACE workspace);
+        void                track(PHLWORKSPACE workspace);
 
       private:
         std::deque<SHistoryEntry> m_history;
 
-        void                      track(PHLWORKSPACE w);
         void                      gc();
     };
 

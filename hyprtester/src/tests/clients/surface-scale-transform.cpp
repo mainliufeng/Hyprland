@@ -5,6 +5,7 @@
 #include "build.hpp"
 #include "tests.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -14,9 +15,11 @@
 #include <hyprutils/os/FileDescriptor.hpp>
 #include <hyprutils/os/Process.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
+#include <initializer_list>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/poll.h>
 #include <unistd.h>
 
@@ -134,13 +137,13 @@ std::string CClient::command(const std::string& command) {
     return ret;
 }
 
-static std::string waitCommandContains(CClient& client, const std::string& command, const std::string& needle) {
+static std::string waitCommandContains(CClient& client, const std::string& command, std::initializer_list<std::string_view> needles) {
     std::string ret;
     const auto  deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
     while (std::chrono::steady_clock::now() < deadline) {
         ret = client.command(command);
-        if (ret.contains(needle))
+        if (std::ranges::all_of(needles, [&](const auto needle) { return ret.contains(needle); }))
             return ret;
 
         getFromSocket("/version");
@@ -179,12 +182,14 @@ TEST_CASE(surfaceScaleTransform) {
         client.emplace();
     } catch (const std::exception& e) { FAIL_TEST("Couldn't start the surface scale/transform client: {}", e.what()); }
 
-    ASSERT_CONTAINS(client->command("report"), "root_scale=2");
-    ASSERT_CONTAINS(client->command("report"), "root_fraction=180");
-    ASSERT_CONTAINS(client->command("report"), "root_transform=0");
+    const auto initial = waitCommandContains(*client, "report", {"root_scale=2", "root_fraction=180", "root_transform=0"});
+    ASSERT_CONTAINS(initial, "root_scale=2");
+    ASSERT_CONTAINS(initial, "root_fraction=180");
+    ASSERT_CONTAINS(initial, "root_transform=0");
 
     OK(getFromSocket("/eval hl.monitor({ output = 'HEADLESS-2', mode = '1920x1080@60', position = '0x0', scale = '1.5', transform = 1 })"));
-    ASSERT_CONTAINS(waitCommandContains(*client, "report", "root_transform=1"), "root_transform=1");
+    const auto transformed = waitCommandContains(*client, "report", {"root_transform=1"});
+    ASSERT_CONTAINS(transformed, "root_transform=1");
 
     const auto beforeUnmap = client->command("report");
     ASSERT_CONTAINS(beforeUnmap, "root_scale_count=");
@@ -197,7 +202,7 @@ TEST_CASE(surfaceScaleTransform) {
     EXPECT_NOT(afterRemap, beforeUnmap);
 
     ASSERT(client->command("subsurface"), "ok");
-    const auto withChild = client->command("report");
+    const auto withChild = waitCommandContains(*client, "report", {"child_scale=2", "child_fraction=180", "child_transform=1"});
     EXPECT_CONTAINS(withChild, "child_scale=2");
     EXPECT_CONTAINS(withChild, "child_fraction=180");
     EXPECT_CONTAINS(withChild, "child_transform=1");

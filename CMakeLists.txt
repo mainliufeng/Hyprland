@@ -596,6 +596,7 @@ protocolnew("unstable/xdg-foreign" "xdg-foreign-unstable-v2" false)
 protocolnew("staging/xdg-activation" "xdg-activation-v1" false)
 protocolnew("staging/ext-idle-notify" "ext-idle-notify-v1" false)
 protocolnew("staging/ext-session-lock" "ext-session-lock-v1" false)
+protocolnew("protocols" "hyprland-lock-scope-v1" true)
 protocolnew("stable/tablet" "tablet-v2" false)
 protocolnew("stable/presentation-time" "presentation-time" false)
 protocolnew("stable/xdg-shell" "xdg-shell" false)
@@ -731,12 +732,16 @@ if(BUILD_TESTING OR WITH_TESTS)
   # Enable coverage in main hyprland lib
   target_compile_options(hyprland_lib PRIVATE --coverage)
   target_link_options(hyprland_lib PRIVATE --coverage)
-  target_link_libraries(hyprland_lib PUBLIC gcov)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(hyprland_lib PUBLIC gcov)
+  endif()
 
   # Enable coverage in hyprland exe
   target_compile_options(Hyprland PRIVATE --coverage)
   target_link_options(Hyprland PRIVATE --coverage)
-  target_link_libraries(Hyprland gcov)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(Hyprland gcov)
+  endif()
 endif()
 
 if(BUILD_TESTING)
@@ -749,4 +754,61 @@ if(BUILD_TESTING)
 
 else()
   message(STATUS "Testing is disabled")
+endif()
+
+# The graphics integration suite is opt-in: it needs a private user namespace,
+# a systemd user manager for resource limits, and the declared runtime tools.
+option(WITH_MULTISEAT_TESTS "Enable isolated native multi-seat integration tests" OFF)
+if(WITH_MULTISEAT_TESTS)
+  if(NOT (BUILD_TESTING OR WITH_TESTS))
+    message(FATAL_ERROR "WITH_MULTISEAT_TESTS requires BUILD_TESTING or WITH_TESTS for upstream regressions")
+  endif()
+  enable_testing()
+  if(NO_XWAYLAND)
+    message(FATAL_ERROR "WITH_MULTISEAT_TESTS includes the upstream XWayland tests and requires an XWayland-enabled build")
+  endif()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(HYPRLAND_TEST_TOOLS_DIR "$ENV{HYPRLAND_TEST_TOOLS_DIR}" CACHE PATH "Additional real integration-test executables")
+  foreach(tool bash sh bwrap systemd-run flock timeout nice dbus-daemon mutter cc pkg-config wayland-scanner wl-copy wl-paste
+      kitty kitten xeyes jq Xwayland pgrep ps sleep cat touch realpath env mkdir mktemp)
+    string(MAKE_C_IDENTIFIER "${tool}" tool_var)
+    find_program(MULTISEAT_${tool_var} NAMES ${tool} HINTS "${HYPRLAND_TEST_TOOLS_DIR}" REQUIRED)
+  endforeach()
+  pkg_check_modules(multiseat_test_deps REQUIRED wayland-client xkbcommon wayland-protocols gtk+-3.0)
+  execute_process(COMMAND ${Python3_EXECUTABLE} -c
+    "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('GdkPixbuf', '2.0'); from gi.repository import Gtk, GdkPixbuf"
+    RESULT_VARIABLE MULTISEAT_PYTHON_IMPORT_RESULT)
+  if(NOT MULTISEAT_PYTHON_IMPORT_RESULT EQUAL 0)
+    message(FATAL_ERROR "Multi-seat tests require Python GObject bindings and the Gtk 3/GdkPixbuf typelibs")
+  endif()
+
+  if(NOT TARGET hyprctl)
+    message(FATAL_ERROR "Multi-seat integration tests require the matching hyprctl build target")
+  endif()
+  set(MULTISEAT_TEST_ENV "HYPRLAND_TEST_PYTHON=${Python3_EXECUTABLE}" "HYPRLAND_TEST_HYPRCTL=$<TARGET_FILE:hyprctl>")
+  if(HYPRLAND_TEST_TOOLS_DIR)
+    list(APPEND MULTISEAT_TEST_ENV "HYPRLAND_TEST_TOOLS_DIR=${HYPRLAND_TEST_TOOLS_DIR}")
+  endif()
+  set(MULTISEAT_RUNNER "${CMAKE_CURRENT_SOURCE_DIR}/hyprtester/multiseat/sandbox.sh")
+  set(MULTISEAT_PLUGIN "${CMAKE_CURRENT_SOURCE_DIR}/hyprtester/plugin/hyprtestplugin.so")
+  foreach(suite controller lifecycle dispatcher multiseat single-seat)
+    if(suite STREQUAL "multiseat" OR suite STREQUAL "single-seat")
+      add_test(NAME "integration.${suite}" COMMAND ${CMAKE_COMMAND} -E env ${MULTISEAT_TEST_ENV} ${MULTISEAT_RUNNER} ${suite}
+        $<TARGET_FILE:Hyprland> $<TARGET_FILE:hyprtester> ${MULTISEAT_PLUGIN} $<TARGET_FILE_DIR:hyprtester>)
+    else()
+      add_test(NAME "integration.${suite}" COMMAND ${CMAKE_COMMAND} -E env ${MULTISEAT_TEST_ENV} ${MULTISEAT_RUNNER} ${suite} $<TARGET_FILE:Hyprland>)
+    endif()
+    set_tests_properties("integration.${suite}" PROPERTIES
+      LABELS "integration;multiseat" RUN_SERIAL TRUE RESOURCE_LOCK hyprland_multiseat
+      TIMEOUT 1200)
+  endforeach()
+
+  add_custom_target(seat-controller-check
+    COMMAND ${CMAKE_COMMAND} -E env ${MULTISEAT_TEST_ENV} ${MULTISEAT_RUNNER} controller $<TARGET_FILE:Hyprland>
+    DEPENDS Hyprland USES_TERMINAL)
+  add_custom_target(multiseat-check
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L multiseat
+    DEPENDS Hyprland hyprctl hyprtester pointer-warp pointer-scroll shortcut-inhibitor keyboard-modifiers
+      fullscreen-with-monitor surface-scale-transform xdg-interactive xdg-activation xdg-initial-maximize
+      popup-render wlr-foreign-toplevel toplevel-capture child-window USES_TERMINAL)
 endif()

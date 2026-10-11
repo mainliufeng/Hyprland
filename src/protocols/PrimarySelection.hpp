@@ -9,6 +9,9 @@
 
 class CPrimarySelectionOffer;
 class CPrimarySelectionSource;
+class CWLSeatResource;
+class CSeatManager;
+
 class CPrimarySelectionDevice;
 class CPrimarySelectionManager;
 
@@ -19,6 +22,7 @@ class CPrimarySelectionOffer {
     bool            good();
     void            sendData();
 
+    CSeatManager*   m_seat = nullptr;
     bool            m_dead = false;
 
     WP<IDataSource> m_source;
@@ -54,7 +58,8 @@ class CPrimarySelectionSource : public IDataSource {
 
 class CPrimarySelectionDevice {
   public:
-    CPrimarySelectionDevice(SP<CZwpPrimarySelectionDeviceV1> resource_);
+    CPrimarySelectionDevice(SP<CZwpPrimarySelectionDeviceV1> resource_, SP<CWLSeatResource> seat);
+    CSeatManager*               manager() const;
 
     bool                        good();
     wl_client*                  client();
@@ -65,6 +70,8 @@ class CPrimarySelectionDevice {
     WP<CPrimarySelectionDevice> m_self;
 
   private:
+    CHyprSignalListener              m_focusListener;
+    SP<CWLSeatResource>              m_seat;
     SP<CZwpPrimarySelectionDeviceV1> m_resource;
     wl_client*                       m_client = nullptr;
 
@@ -103,13 +110,13 @@ class CPrimarySelectionProtocol : public IWaylandProtocol {
     std::vector<SP<CPrimarySelectionOffer>>   m_offers;
 
     //
-    void setSelection(SP<IDataSource> source);
+    void setSelection(SP<IDataSource> source, CSeatManager* seat = nullptr);
     void sendSelectionToDevice(SP<CPrimarySelectionDevice> dev, SP<IDataSource> sel);
-    void updateSelection();
-    void onPointerFocus();
+    void updateSelection(CSeatManager* seat = nullptr);
+    void onPointerFocus(CSeatManager* seat = nullptr);
 
     //
-    SP<CPrimarySelectionDevice> dataDeviceForClient(wl_client*);
+    SP<CPrimarySelectionDevice> dataDeviceForClient(wl_client*, CSeatManager* seat = nullptr);
 
     friend class CPrimarySelectionManager;
     friend class CPrimarySelectionDevice;

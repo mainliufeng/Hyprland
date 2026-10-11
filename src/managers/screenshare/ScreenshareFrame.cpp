@@ -1,4 +1,5 @@
 #include "ScreenshareManager.hpp"
+#include "../SessionLockManager.hpp"
 #include "../../pointer/PointerManager.hpp"
 #include "../SeatManager.hpp"
 #include "../permissions/DynamicPermissionManager.hpp"
@@ -23,7 +24,7 @@ using namespace Screenshare;
 using namespace Desktop::View;
 
 CScreenshareFrame::CScreenshareFrame(WP<CScreenshareSession> session, bool overlayCursor, bool isFirst) :
-    m_session(session), m_bufferSize(m_session->bufferSize()), m_overlayCursor(overlayCursor), m_isFirst(isFirst) {
+    m_session(session), m_lockEpoch(g_pSessionLockManager->lockEpoch()), m_bufferSize(m_session->bufferSize()), m_overlayCursor(overlayCursor), m_isFirst(isFirst) {
     ;
 }
 
@@ -45,7 +46,7 @@ bool CScreenshareFrame::done() const {
     if (m_session->m_type == SHARE_NONE || m_bufferSize == Vector2D(0, 0))
         return true;
 
-    if (m_failed || m_copied)
+    if (m_failed || m_copied || m_lockEpoch != g_pSessionLockManager->lockEpoch() || !m_session->isActive())
         return true;
 
     if (m_session->m_type == SHARE_MONITOR && !m_session->monitor())
@@ -426,8 +427,12 @@ bool CScreenshareFrame::copyDmabuf() {
 
         self->m_copyInFlight = false;
 
-        if (self->m_copied)
+        if (self->done()) {
+            self->m_failed = true;
+            if (self->m_callback)
+                self->m_callback(RESULT_NOT_COPIED);
             return;
+        }
 
         LOG(Log::TRACE, "Copied frame via dma");
         self->m_callback(RESULT_COPIED);

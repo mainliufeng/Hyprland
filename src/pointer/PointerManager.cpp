@@ -1,4 +1,5 @@
 #include "PointerManager.hpp"
+#include "../managers/SeatDesktop.hpp"
 #include "PointerTransformer.hpp"
 #include "../Compositor.hpp"
 #include "../config/ConfigValue.hpp"
@@ -84,17 +85,8 @@ cairo_matrix_t CPointerManager::SCursorImageData::cairoMatrix(const Vector2D& te
     return matrix;
 }
 
-CPointerManager::CPointerManager() {
-    m_hooks.monitorAdded = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR monitor) {
-        onMonitorLayoutChange();
-
-        monitor->m_events.modeChanged.listenStatic([this] { g_pEventLoopManager->doLater([this]() { onMonitorLayoutChange(); }); });
-        monitor->m_events.disconnect.listenStatic([this] { g_pEventLoopManager->doLater([this]() { onMonitorLayoutChange(); }); });
-        monitor->m_events.destroy.listenStatic([this] {
-            if (g_pCompositor && !g_pCompositor->m_isShuttingDown)
-                std::erase_if(m_monitorStates, [](const auto& other) { return other->monitor.expired(); });
-        });
-    });
+CPointerManager::CPointerManager(bool softwareOnly) : m_softwareOnly(softwareOnly) {
+    m_hooks.monitorAdded = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR) { onMonitorLayoutChange(); });
 
     m_hooks.monitorLayoutChanged = Event::bus()->m_events.monitor.layoutChanged.listen([this] { onMonitorLayoutChange(); });
 
@@ -141,6 +133,11 @@ void CPointerManager::unlockSoftwareForMonitor(PHLMONITOR mon) {
         updateCursorBackend();
 }
 
+void CPointerManager::bindMonitor(PHLMONITOR monitor) {
+    m_boundMonitor = monitor;
+    onMonitorLayoutChange();
+}
+
 bool CPointerManager::softwareLockedFor(PHLMONITOR mon) {
     auto const state = stateFor(mon);
     return state->softwareLocks > 0 || (state->hardwareFailed && hasCursor() && g_pHyprRenderer->shouldRenderCursor());
@@ -183,9 +180,27 @@ bool CPointerManager::hasCursor() {
 
 SP<CPointerManager::SMonitorPointerState> CPointerManager::stateFor(PHLMONITOR mon) {
     auto it = std::ranges::find_if(m_monitorStates, [mon](const auto& other) { return other->monitor == mon; });
-    if (it == m_monitorStates.end())
-        return m_monitorStates.emplace_back(makeShared<CPointerManager::SMonitorPointerState>(mon));
-    return *it;
+    if (it != m_monitorStates.end())
+        return *it;
+    auto state = makeShared<SMonitorPointerState>(mon);
+    if (mon) {
+        const auto lifetime      = WP<bool>{m_lifetime};
+        auto       layoutChanged = [this, lifetime] {
+            if (!lifetime)
+                return;
+            g_pEventLoopManager->doLater([this, lifetime] {
+                if (lifetime)
+                    onMonitorLayoutChange();
+            });
+        };
+        state->listeners.modeChanged = mon->m_events.modeChanged.listen(layoutChanged);
+        state->listeners.disconnect  = mon->m_events.disconnect.listen(layoutChanged);
+        state->listeners.destroy     = mon->m_events.destroy.listen([this, lifetime, identity = mon.get()] {
+            if (lifetime && g_pCompositor && !g_pCompositor->m_isShuttingDown)
+                std::erase_if(m_monitorStates, [identity](const auto& other) { return other->monitor.expired() || other->monitor.get() == identity; });
+        });
+    }
+    return m_monitorStates.emplace_back(std::move(state));
 }
 
 void CPointerManager::setCursorBuffer(SP<Aquamarine::IBuffer> buf, const Vector2D& hotspot, const float& scale) {
@@ -402,6 +417,11 @@ void CPointerManager::updateCursorBackend() {
     for (auto const& m : State::monitorState()->monitors()) {
         auto state = stateFor(m);
         state->box = getCursorBoxLogicalForMonitor(m);
+        if (m_softwareOnly) {
+            state->hardwareFailed = true;
+            damageSoftwareLeftover(state, m);
+            continue;
+        }
 
         if (!m->m_enabled || !m->m_dpmsStatus) {
             LOG(Log::TRACE, "Not updating hw cursors: disabled / dpms off display");
@@ -467,7 +487,7 @@ void CPointerManager::onCursorMoved() {
 
         CScopeGuard x([m] { m->onCursorMovedOnMonitor(); });
 
-        if (state->hardwareFailed)
+        if (m_softwareOnly || state->hardwareFailed)
             continue;
 
         const auto CURSORPOS = getCursorPosForMonitor(m);
@@ -806,13 +826,18 @@ CBox CPointerManager::getCursorBoxGlobal() {
 }
 
 Vector2D CPointerManager::closestValid(const Vector2D& pos) {
+    if (m_boundMonitor) {
+        auto position = m_boundMonitor->logicalBox().closestPoint(pos);
+        return {std::clamp(position.x, m_boundMonitor->m_position.x, m_boundMonitor->m_position.x + m_boundMonitor->m_size.x - 1),
+                std::clamp(position.y, m_boundMonitor->m_position.y, m_boundMonitor->m_position.y + m_boundMonitor->m_size.y - 1)};
+    }
     static auto PADDING = CConfigValue<Config::INTEGER>("cursor:hotspot_padding");
 
     auto        CURSOR_PADDING = std::clamp(sc<int>(*PADDING), 0, 100);
     CBox        hotBox         = {{pos.x - CURSOR_PADDING, pos.y - CURSOR_PADDING}, {2 * CURSOR_PADDING, 2 * CURSOR_PADDING}};
 
     //
-    static auto INSIDE_LAYOUT = [this](const CBox& box) -> bool {
+    auto INSIDE_LAYOUT = [this](const CBox& box) -> bool {
         for (auto const& b : m_currentMonitorLayout.monitorBoxes) {
             if (box.inside(b))
                 return true;
@@ -820,7 +845,7 @@ Vector2D CPointerManager::closestValid(const Vector2D& pos) {
         return false;
     };
 
-    static auto INSIDE_LAYOUT_COORD = [this](const Vector2D& vec) -> bool {
+    auto INSIDE_LAYOUT_COORD = [this](const Vector2D& vec) -> bool {
         for (auto const& b : m_currentMonitorLayout.monitorBoxes) {
             if (b.containsPoint(vec))
                 return true;
@@ -828,7 +853,7 @@ Vector2D CPointerManager::closestValid(const Vector2D& pos) {
         return false;
     };
 
-    static auto NEAREST_LAYOUT = [this](const Vector2D& vec) -> Vector2D {
+    auto NEAREST_LAYOUT = [this](const Vector2D& vec) -> Vector2D {
         Vector2D leader;
         float    distanceSq = __FLT_MAX__;
 
@@ -906,7 +931,7 @@ void CPointerManager::warpTo(const Vector2D& logical) {
 
     m_pointerPos = closestValid(logical);
 
-    if (!g_pInputManager->isLocked()) {
+    if (m_softwareOnly || !g_pInputManager->isLocked()) {
         recheckEnteredOutputs();
         onCursorMoved();
     }
@@ -918,10 +943,10 @@ void CPointerManager::move(const Vector2D& deltaLogical) {
     const auto oldPos = m_pointerPos;
     auto       newPos = oldPos + Vector2D{std::isnan(deltaLogical.x) ? 0.0 : deltaLogical.x, std::isnan(deltaLogical.y) ? 0.0 : deltaLogical.y};
 
-    if (!g_pInputManager->isLocked())
+    if (!m_softwareOnly && !g_pInputManager->isLocked())
         PROTO::inputCapture->motion(newPos, deltaLogical);
 
-    if (PROTO::inputCapture->isCaptured())
+    if (!m_softwareOnly && PROTO::inputCapture->isCaptured())
         return;
 
     warpTo(newPos);
@@ -1028,7 +1053,7 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
 void CPointerManager::onMonitorLayoutChange() {
     m_currentMonitorLayout.monitorBoxes.clear();
     for (auto const& m : State::monitorState()->monitors()) {
-        if (m->isMirror() || !m->m_enabled || !m->m_output)
+        if (m->isMirror() || !m->m_enabled || !m->m_output || (!m_softwareOnly && SeatInput::registry() && SeatInput::registry()->isPrivateOutput(m)))
             continue;
 
         m_currentMonitorLayout.monitorBoxes.emplace_back(m->m_position, m->m_size);
@@ -1147,12 +1172,16 @@ void CPointerManager::attachPointer(SP<IPointer> pointer) {
         PROTO::idle->onActivity();
     });
 
-    listener->holdBegin = pointer->m_pointerEvents.holdBegin.listen([](const IPointer::SHoldBeginEvent& event) {
+    listener->holdBegin = pointer->m_pointerEvents.holdBegin.listen([pointer](const IPointer::SHoldBeginEvent& event) {
+        if (!SeatInput::registry()->primaryInput(pointer.get()))
+            return;
         PROTO::pointerGestures->holdBegin(event.timeMs, event.fingers);
         PROTO::idle->onActivity();
     });
 
-    listener->holdEnd = pointer->m_pointerEvents.holdEnd.listen([](const IPointer::SHoldEndEvent& event) {
+    listener->holdEnd = pointer->m_pointerEvents.holdEnd.listen([pointer](const IPointer::SHoldEndEvent& event) {
+        if (!SeatInput::registry()->primaryInput(pointer.get()))
+            return;
         PROTO::pointerGestures->holdEnd(event.timeMs, event.cancelled);
         PROTO::idle->onActivity();
     });

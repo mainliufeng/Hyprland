@@ -33,7 +33,8 @@ namespace Monitor {
             bool                                     vrr               = false;
             bool                                     copyFBPrepared    = false;
             std::optional<uint32_t>                  previousFormat;
-            uint64_t                                 id = 0;
+            uint64_t                                 id        = 0;
+            uint64_t                                 lockEpoch = 0;
         };
 
         struct SStagedRender {
@@ -69,5 +70,6 @@ namespace Monitor {
         std::optional<SFrame>        m_pending;
         std::optional<SStagedRender> m_stagedRender;
         bool                         m_stateCommitPending = false;
+        uint64_t                     m_syncLockEpoch      = 0;
     };
 }

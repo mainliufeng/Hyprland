@@ -5,6 +5,9 @@
 #include "../../helpers/signal/Signal.hpp"
 
 #include <optional>
+#include <chrono>
+
+class CSeatDesktop;
 
 namespace Layout {
     enum eRectCorner : uint8_t;
@@ -16,7 +19,7 @@ namespace Layout::Supplementary {
     // toggling float when dragging tiled, remembering sizes, checking deltas, etc.
     class CDragStateController {
       public:
-        CDragStateController()  = default;
+        explicit CDragStateController(CSeatDesktop* seat = nullptr);
         ~CDragStateController() = default;
 
         void           dragBegin(SP<ITarget> target, eMouseBindMode mode, std::optional<Layout::eRectCorner> forcedEdge = std::nullopt, bool exclusiveDeviceGrab = false);
@@ -45,23 +48,31 @@ namespace Layout::Supplementary {
         } m_events;
 
       private:
-        WP<ITarget>                        m_target;
+        Vector2D                                       mouseCoords() const;
+        Vector2D                                       untransformedCoords() const;
+        void                                           setCursorOverride(const std::string& shape);
+        void                                           unsetCursorOverride();
+        CSeatDesktop*                                  m_seat    = nullptr;
+        std::chrono::high_resolution_clock::time_point m_timer   = std::chrono::high_resolution_clock::now();
+        std::chrono::high_resolution_clock::time_point m_msTimer = m_timer;
+        int                                            m_totalMs = 0;
+        WP<ITarget>                                    m_target;
 
-        eMouseBindMode                     m_dragMode             = MBIND_INVALID;
-        bool                               m_wasDraggingWindow    = false;
-        bool                               m_dragThresholdReached = false;
-        bool                               m_draggingTiled        = false;
-        bool                               m_exclusiveDeviceGrab  = false;
+        eMouseBindMode                                 m_dragMode             = MBIND_INVALID;
+        bool                                           m_wasDraggingWindow    = false;
+        bool                                           m_dragThresholdReached = false;
+        bool                                           m_draggingTiled        = false;
+        bool                                           m_exclusiveDeviceGrab  = false;
 
-        int                                m_mouseMoveEventCount = 0;
-        Vector2D                           m_dragHotspot;
-        Vector2D                           m_beginDragXY;
-        Vector2D                           m_beginDragUntransformedXY;
-        Vector2D                           m_lastDragXY;
-        Vector2D                           m_beginDragPositionXY;
-        Vector2D                           m_beginDragSizeXY;
-        Vector2D                           m_draggingWindowOriginalFloatSize;
-        Layout::eRectCorner                m_grabbedCorner = sc<Layout::eRectCorner>(0) /* CORNER_NONE */;
-        std::optional<Layout::eRectCorner> m_forcedGrabbedCorner;
+        int                                            m_mouseMoveEventCount = 0;
+        Vector2D                                       m_dragHotspot;
+        Vector2D                                       m_beginDragXY;
+        Vector2D                                       m_beginDragUntransformedXY;
+        Vector2D                                       m_lastDragXY;
+        Vector2D                                       m_beginDragPositionXY;
+        Vector2D                                       m_beginDragSizeXY;
+        Vector2D                                       m_draggingWindowOriginalFloatSize;
+        Layout::eRectCorner                            m_grabbedCorner = sc<Layout::eRectCorner>(0) /* CORNER_NONE */;
+        std::optional<Layout::eRectCorner>             m_forcedGrabbedCorner;
     };
 };

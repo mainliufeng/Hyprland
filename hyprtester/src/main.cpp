@@ -26,6 +26,7 @@
 #include <hyprutils/os/Process.hpp>
 #include <hyprutils/memory/WeakPtr.hpp>
 #include <hyprutils/memory/Casts.hpp>
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -192,7 +193,16 @@ static STestsRunResult runTests(std::vector<std::shared_ptr<CTestCase>>& testCas
             std::exit(1);
 
         NLog::log("{}Running test {}", Colors::BLUE, tc->name());
-        tc->test();
+        {
+            Hyprutils::Utils::CScopeGuard inputGuard([&] {
+                const auto result = getFromSocket("/eval hl.plugin.test.reset_mouse_buttons()");
+                if (result != "ok") {
+                    NLog::red("Failed to release test mouse buttons after {}: {}", tc->name(), result);
+                    tc->failed = true;
+                }
+            });
+            tc->test();
+        }
 
         if (tc->failed) {
             NLog::red("Test failed!: {}", tc->name());

@@ -1,4 +1,6 @@
 #include "Commands.hpp"
+#include "CommandFormatter.hpp"
+#include "SeatCommands.hpp"
 #include "../../desktop/view/window/WindowFullscreenPolicy.hpp"
 #include "../../desktop/view/window/WindowGroupMembership.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
@@ -80,16 +82,6 @@ using namespace Hyprutils::String;
 using namespace Render::GL;
 using namespace IPC::Socket1;
 using eHyprCtlOutputFormat = eOutputFormat;
-
-class CCommandFormatter {
-  public:
-    static std::string getWindowData(PHLWINDOW window, eOutputFormat format);
-    static std::string getWorkspaceData(PHLWORKSPACE workspace, eOutputFormat format);
-    static std::string getSolitaryBlockedReason(PHLMONITOR monitor, eOutputFormat format);
-    static std::string getDSBlockedReason(PHLMONITOR monitor, eOutputFormat format);
-    static std::string getTearingBlockedReason(PHLMONITOR monitor, eOutputFormat format);
-    static std::string getMonitorData(PHLMONITOR monitor, eOutputFormat format);
-};
 
 static void trimTrailingComma(std::string& str) {
     if (!str.empty() && str.back() == ',')
@@ -804,7 +796,7 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
         result += "\"keyboards\": [\n";
         for (auto const& k : g_pInputManager->m_keyboards) {
             const auto INDEX_OPT = k->getActiveLayoutIndex();
-            const auto KI        = INDEX_OPT.has_value() ? std::to_string(INDEX_OPT.value()) : "none";
+            const auto KI        = INDEX_OPT.has_value() ? std::to_string(INDEX_OPT.value()) : "null";
             const auto KM        = k->getActiveLayout();
             result += std::format(
                 R"#(    {{
@@ -1214,7 +1206,7 @@ static std::string evalRequest(eHyprCtlOutputFormat format, std::string request)
     return "ok";
 }
 
-static std::string dispatchRequest(eHyprCtlOutputFormat format, std::string in) {
+std::string IPC::Socket1::dispatchRequest(eOutputFormat format, std::string in) {
     // get rid of the dispatch keyword
     in = in.substr(in.find_first_of(' ') + 1);
 
@@ -1966,6 +1958,7 @@ static SCommand legacyCommand(std::string name, eCommandMatch match, F handler) 
 }
 
 void IPC::Socket1::registerBuiltinCommands(CSocket1& socket) {
+    socket.registerCommand(legacyCommand("seat", COMMAND_MATCH_PREFIX, seatRequest));
     socket.registerCommand(legacyCommand("workspaces", COMMAND_MATCH_EXACT, workspacesRequest));
     socket.registerCommand(legacyCommand("workspacerules", COMMAND_MATCH_EXACT, workspaceRulesRequest));
     socket.registerCommand(legacyCommand("activeworkspace", COMMAND_MATCH_EXACT, activeWorkspaceRequest));

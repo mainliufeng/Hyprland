@@ -3,7 +3,7 @@
 #include "core/Seat.hpp"
 #include <algorithm>
 
-CRelativePointer::CRelativePointer(SP<CZwpRelativePointerV1> resource_) : m_resource(resource_) {
+CRelativePointer::CRelativePointer(SP<CZwpRelativePointerV1> resource_, SP<CWLPointerResource> pointer) : m_resource(resource_), m_pointer(pointer) {
     if UNLIKELY (!resource_->resource())
         return;
 
@@ -51,8 +51,10 @@ void CRelativePointerProtocol::destroyRelativePointer(CRelativePointer* pointer)
 }
 
 void CRelativePointerProtocol::onGetRelativePointer(CZwpRelativePointerManagerV1* pMgr, uint32_t id, wl_resource* pointer) {
-    const auto CLIENT   = pMgr->client();
-    const auto RESOURCE = m_relativePointers.emplace_back(makeUnique<CRelativePointer>(makeShared<CZwpRelativePointerV1>(CLIENT, pMgr->version(), id))).get();
+    const auto CLIENT = pMgr->client();
+    const auto RESOURCE =
+        m_relativePointers.emplace_back(makeUnique<CRelativePointer>(makeShared<CZwpRelativePointerV1>(CLIENT, pMgr->version(), id), CWLPointerResource::fromResource(pointer)))
+            .get();
 
     if UNLIKELY (!RESOURCE->good()) {
         pMgr->noMemory();
@@ -61,11 +63,12 @@ void CRelativePointerProtocol::onGetRelativePointer(CZwpRelativePointerManagerV1
     }
 }
 
-void CRelativePointerProtocol::sendRelativeMotion(uint64_t time, const Vector2D& delta, const Vector2D& deltaUnaccel) {
-    if (!g_pSeatManager->m_state.pointerFocusResource)
+void CRelativePointerProtocol::sendRelativeMotion(uint64_t time, const Vector2D& delta, const Vector2D& deltaUnaccel, CSeatManager* seat) {
+    seat = seat ? seat : g_pSeatManager.get();
+    if (!seat->m_state.pointerFocusResource)
         return;
 
-    const auto FOCUSED   = g_pSeatManager->m_state.pointerFocusResource->client();
+    const auto FOCUSED   = seat->m_state.pointerFocusResource->client();
     const auto TIMEHI    = sc<uint32_t>(time >> 32);
     const auto TIMELO    = sc<uint32_t>(time & 0xFFFFFFFF);
     const auto DX        = wl_fixed_from_double(delta.x);
@@ -74,9 +77,13 @@ void CRelativePointerProtocol::sendRelativeMotion(uint64_t time, const Vector2D&
     const auto DYUNACCEL = wl_fixed_from_double(deltaUnaccel.y);
 
     for (auto const& rp : m_relativePointers) {
-        if (FOCUSED != rp->client())
+        if (FOCUSED != rp->client() || rp->manager() != seat)
             continue;
 
         rp->sendRelativeMotion(TIMEHI, TIMELO, DX, DY, DXUNACCEL, DYUNACCEL);
     }
+}
+
+CSeatManager* CRelativePointer::manager() const {
+    return m_pointer && m_pointer->m_owner ? m_pointer->m_owner->manager() : nullptr;
 }

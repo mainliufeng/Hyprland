@@ -18,6 +18,7 @@
 #include "managers/TokenManager.hpp"
 #include "pointer/PointerManager.hpp"
 #include "managers/SeatManager.hpp"
+#include "managers/SeatDesktop.hpp"
 #include "managers/VersionKeeperManager.hpp"
 #include "managers/DonationNagManager.hpp"
 #include "managers/ANRManager.hpp"
@@ -265,6 +266,8 @@ static std::vector<SP<Aquamarine::IOutput>> pendingOutputs;
 //
 
 static bool filterGlobals(const wl_client* client, const wl_global* global, void* data) {
+    if (SeatInput::registry() && !SeatInput::registry()->allowsGlobal(client, global))
+        return false;
     if (!PROTO::securityContext->isClientSandboxed(client))
         return true;
 
@@ -428,6 +431,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
     initManagers(STAGE_LATE);
 
     m_listeners.lock = g_pSessionLockManager->m_events.lock.listen([this] {
+        SeatInput::registry()->setPrimaryPaused(true);
         static int lock_count = 0;
         // lock_count used to avoid triggering condition on initial forceLock()
         if (m_startLocked && lock_count >= 1) {
@@ -612,6 +616,7 @@ void CCompositor::cleanup() {
 
     removeAllSignals();
 
+    SeatInput::registry().reset();
     g_pInputManager.reset();
     g_pDynamicPermissionManager.reset();
     g_pDecorationPositioner.reset();
@@ -709,7 +714,8 @@ void CCompositor::initManagers(eManagersInitStage stage) {
             g_pProtocolManager = makeUnique<CProtocolManager>();
 
             LOG(Log::DEBUG, "Creating the SeatManager!");
-            g_pSeatManager = makeUnique<CSeatManager>();
+            g_pSeatManager        = makeUnique<CSeatManager>();
+            SeatInput::registry() = makeUnique<CSeatDesktopRegistry>();
 
             LOG(Log::DEBUG, "Creating the SessionLockManager!");
             g_pSessionLockManager = makeUnique<CSessionLockManager>();

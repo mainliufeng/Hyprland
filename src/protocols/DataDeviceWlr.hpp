@@ -9,12 +9,17 @@
 
 class CWLRDataControlManagerResource;
 class CWLRDataSource;
+class CWLSeatResource;
+class CSeatManager;
+
 class CWLRDataDevice;
 class CWLRDataOffer;
 
 class CWLRDataOffer {
   public:
     CWLRDataOffer(SP<CZwlrDataControlOfferV1> resource_, SP<IDataSource> source);
+
+    CSeatManager*   m_seat = nullptr;
 
     bool            good();
     void            sendData();
@@ -54,7 +59,8 @@ class CWLRDataSource : public IDataSource {
 
 class CWLRDataDevice {
   public:
-    CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_);
+    CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_, SP<CWLSeatResource> seat);
+    CSeatManager*      manager() const;
 
     bool               good();
     wl_client*         client();
@@ -67,6 +73,7 @@ class CWLRDataDevice {
     WP<CWLRDataDevice> self;
 
   private:
+    SP<CWLSeatResource>          m_seat;
     SP<CZwlrDataControlDeviceV1> m_resource;
     wl_client*                   m_client = nullptr;
 
@@ -105,7 +112,7 @@ class CDataDeviceWLRProtocol : public IWaylandProtocol {
     std::vector<SP<CWLRDataOffer>>                  m_offers;
 
     //
-    void setSelection(SP<IDataSource> source, bool primary);
+    void setSelection(SP<IDataSource> source, bool primary, CSeatManager* seat = nullptr);
     void sendSelectionToDevice(SP<CWLRDataDevice> dev, SP<IDataSource> sel, bool primary);
 
     //

@@ -60,7 +60,7 @@ PHLWINDOW CViewHitTester::windowAtInternal(const Vector2D& pos, uint16_t propert
             if (ONLY_PRIORITY && !w->priorityFocus())
                 continue;
 
-            if (w->isFloating() && w->mapped() && w->acceptsInput() && !w->shouldntFocus() && (w->m_state & WINDOW_STATE_PINNED) &&
+            if ((!workspace || w->m_monitor == PMONITOR) && w->isFloating() && w->mapped() && w->acceptsInput() && !w->shouldntFocus() && (w->m_state & WINDOW_STATE_PINNED) &&
                 !w->m_ruleApplicator->noFocus().valueOrDefault() && w != ignoreWindow && !isShadowedByModal(w)) {
                 const auto BB  = w->getWindowBoxUnified(properties);
                 CBox       box = BB.copy().expand(!w->backend().traits().overrideRedirect ? BORDER_GRAB_AREA : 0);
@@ -92,7 +92,7 @@ PHLWINDOW CViewHitTester::windowAtInternal(const Vector2D& pos, uint16_t propert
                 const auto PWINDOWMONITOR = w->m_monitor.lock();
 
                 // to avoid focusing windows behind special workspaces from other monitors
-                if (!*PSPECIALFALLTHRU && PWINDOWMONITOR && PWINDOWMONITOR->m_activeSpecialWorkspace && w->m_workspace != PWINDOWMONITOR->m_activeSpecialWorkspace) {
+                if (!workspace && !*PSPECIALFALLTHRU && PWINDOWMONITOR && PWINDOWMONITOR->m_activeSpecialWorkspace && w->m_workspace != PWINDOWMONITOR->m_activeSpecialWorkspace) {
                     const auto BB = w->getWindowBoxUnified(properties);
                     if (BB.x >= PWINDOWMONITOR->m_position.x && BB.y >= PWINDOWMONITOR->m_position.y &&
                         BB.x + BB.width <= PWINDOWMONITOR->m_position.x + PWINDOWMONITOR->m_size.x && BB.y + BB.height <= PWINDOWMONITOR->m_position.y + PWINDOWMONITOR->m_size.y)

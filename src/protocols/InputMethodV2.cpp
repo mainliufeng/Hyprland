@@ -1,3 +1,4 @@
+#include "core/Seat.hpp"
 #include "InputMethodV2.hpp"
 #include "../desktop/state/FocusState.hpp"
 #include "../managers/SeatManager.hpp"
@@ -14,12 +15,12 @@ CInputMethodKeyboardGrabV2::CInputMethodKeyboardGrabV2(SP<CZwpInputMethodKeyboar
     m_resource->setRelease([this](CZwpInputMethodKeyboardGrabV2* r) { PROTO::ime->destroyResource(this); });
     m_resource->setOnDestroy([this](CZwpInputMethodKeyboardGrabV2* r) { PROTO::ime->destroyResource(this); });
 
-    if (!g_pSeatManager->m_keyboard) {
+    if (!owner_->manager()->m_keyboard) {
         LOG(Log::ERR, "IME called but no active keyboard???");
         return;
     }
 
-    sendKeyboardData(g_pSeatManager->m_keyboard.lock());
+    sendKeyboardData(owner_->manager()->m_keyboard.lock());
 }
 
 CInputMethodKeyboardGrabV2::~CInputMethodKeyboardGrabV2() {
@@ -57,13 +58,13 @@ void CInputMethodKeyboardGrabV2::sendKeyboardData(SP<IKeyboard> keyboard) {
 }
 
 void CInputMethodKeyboardGrabV2::sendKey(uint32_t time, uint32_t key, wl_keyboard_key_state state) {
-    const auto SERIAL = g_pSeatManager->nextSerial(g_pSeatManager->seatResourceForClient(m_resource->client()));
+    const auto SERIAL = m_owner->manager()->nextSerial(m_owner->m_seat);
 
     m_resource->sendKey(SERIAL, time, key, sc<uint32_t>(state));
 }
 
 void CInputMethodKeyboardGrabV2::sendMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
-    const auto SERIAL = g_pSeatManager->nextSerial(g_pSeatManager->seatResourceForClient(m_resource->client()));
+    const auto SERIAL = m_owner->manager()->nextSerial(m_owner->m_seat);
 
     m_resource->sendModifiers(SERIAL, depressed, latched, locked, group);
 }
@@ -147,7 +148,7 @@ void CInputMethodV2::SState::reset() {
     preeditString.committed     = false;
 }
 
-CInputMethodV2::CInputMethodV2(SP<CZwpInputMethodV2> resource_) : m_resource(resource_) {
+CInputMethodV2::CInputMethodV2(SP<CZwpInputMethodV2> resource_, SP<CWLSeatResource> seat) : m_seat(seat), m_resource(resource_) {
     if UNLIKELY (!m_resource->resource())
         return;
 
@@ -357,7 +358,7 @@ void CInputMethodV2Protocol::destroyResource(CInputMethodV2* ime) {
 }
 
 void CInputMethodV2Protocol::onGetIME(CZwpInputMethodManagerV2* mgr, wl_resource* seat, uint32_t id) {
-    const auto RESOURCE = m_imes.emplace_back(makeShared<CInputMethodV2>(makeShared<CZwpInputMethodV2>(mgr->client(), mgr->version(), id)));
+    const auto RESOURCE = m_imes.emplace_back(makeShared<CInputMethodV2>(makeShared<CZwpInputMethodV2>(mgr->client(), mgr->version(), id), CWLSeatResource::fromResource(seat)));
 
     if UNLIKELY (!RESOURCE->good()) {
         mgr->noMemory();
@@ -370,4 +371,8 @@ void CInputMethodV2Protocol::onGetIME(CZwpInputMethodManagerV2* mgr, wl_resource
     LOG(Log::DEBUG, "New IME with resource id {}", id);
 
     m_events.newIME.emit(RESOURCE);
+}
+
+CSeatManager* CInputMethodV2::manager() const {
+    return m_seat->manager();
 }

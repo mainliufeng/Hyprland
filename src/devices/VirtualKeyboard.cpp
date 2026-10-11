@@ -1,4 +1,6 @@
 #include "VirtualKeyboard.hpp"
+#include "../managers/SeatDesktop.hpp"
+#include "../managers/SeatManager.hpp"
 #include "../defines.hpp"
 #include "../protocols/VirtualKeyboard.hpp"
 #include "../config/ConfigManager.hpp"
@@ -17,6 +19,8 @@ CVirtualKeyboard::CVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keeb_) : m_key
         return;
 
     m_listeners.destroy = keeb_->m_events.destroy.listen([this] {
+        if (m_primaryControlGeneration && SeatInput::registry() && m_primaryControlGeneration == SeatInput::registry()->primaryGeneration())
+            SeatInput::registry()->setPrimaryPaused(true);
         m_keyboard.reset();
         m_events.destroy.emit();
     });
@@ -44,6 +48,8 @@ CVirtualKeyboard::CVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keeb_) : m_key
         m_keyboardEvents.keymap.emit(event);
     });
 
+    if (keeb_->manager() == g_pSeatManager.get())
+        m_primaryControlGeneration = SeatInput::registry()->primaryClientGeneration(keeb_->client());
     m_deviceName = keeb_->m_name;
 
     const auto SHARESTATES = Config::mgr()->getDeviceInt(m_deviceName, "share_states", "input:virtualkeyboard:share_states");

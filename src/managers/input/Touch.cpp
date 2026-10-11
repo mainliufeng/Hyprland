@@ -1,3 +1,5 @@
+#include "../SeatPresentation.hpp"
+#include "../SeatDesktop.hpp"
 #include "InputManager.hpp"
 #include "../SessionLockManager.hpp"
 #include "../../protocols/SessionLock.hpp"
@@ -15,6 +17,9 @@
 #include "UnifiedWorkspaceSwipeGesture.hpp"
 
 void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+    SeatInput::registry()->primaryInput(nullptr);
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     m_lastInputTouch = true;
 
     static auto PSWIPETOUCH  = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_touch");
@@ -104,7 +109,7 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     }
 
     // could have abovelock surface, thus only use lock if no ls found
-    if (g_pSessionLockManager->isSessionLocked() && m_foundLSToFocus.expired()) {
+    if (g_pSessionLockManager->isSessionLocked() && (g_pSessionLockManager->scoped() || m_foundLSToFocus.expired())) {
         m_touchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
         if (!m_touchData.touchFocusLockSurface)
             LOG(Log::WARN, "The session is locked but can't find a lock surface");
@@ -148,6 +153,8 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
 }
 
 void CInputManager::onTouchUp(ITouch::SUpEvent e, SP<ITouch> device) {
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     m_lastInputTouch = true;
 
     Event::SCallbackInfo info;
@@ -175,6 +182,8 @@ void CInputManager::onTouchUp(ITouch::SUpEvent e, SP<ITouch> device) {
 }
 
 void CInputManager::onTouchCancel(ITouch::SCancelEvent e, SP<ITouch> device) {
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     if (!device)
         return;
 
@@ -190,6 +199,9 @@ void CInputManager::onTouchCancel(ITouch::SCancelEvent e, SP<ITouch> device) {
 }
 
 void CInputManager::onTouchMove(ITouch::SMotionEvent e, SP<ITouch> device) {
+    SeatInput::registry()->primaryInput(nullptr);
+    if (SeatInput::presentation() && SeatInput::presentation()->active())
+        return;
     m_lastInputTouch = true;
 
     m_lastCursorMovement.reset();
