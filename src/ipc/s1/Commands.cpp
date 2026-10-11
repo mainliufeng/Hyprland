@@ -817,7 +817,7 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
         result += "\"keyboards\": [\n";
         for (auto const& k : g_pInputManager->m_keyboards) {
             const auto INDEX_OPT = k->getActiveLayoutIndex();
-            const auto KI        = INDEX_OPT.has_value() ? std::to_string(INDEX_OPT.value()) : "none";
+            const auto KI        = INDEX_OPT.has_value() ? std::to_string(INDEX_OPT.value()) : "null";
             const auto KM        = k->getActiveLayout();
             result += std::format(
                 R"#(    {{
