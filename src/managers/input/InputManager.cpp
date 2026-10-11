@@ -1245,10 +1245,15 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
 
     g_pSeatManager->setKeyboard(keeb);
 
+    // A surface can already have logical focus before the first keyboard
+    // arrives. Publish its capability before restoring protocol focus; doing
+    // this later makes setKeyboardFocus reject the initial enter event.
+    updateCapabilities();
+
     keeb->updateLEDs();
 
     // in case m_lastFocus was set without a keyboard
-    if (m_keyboards.size() == 1 && Desktop::focusState()->surface())
+    if (m_keyboards.size() == 1 && !g_pSessionLockManager->isSessionLocked() && Desktop::focusState()->surface())
         g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
 }
 
@@ -2013,8 +2018,8 @@ void CInputManager::updateCapabilities() {
     m_capabilities = caps;
 
     // Lock surfaces can be mapped before the first human keyboard exists.
-    // newKeyboard runs before capabilities are updated, so its focus attempt
-    // is rejected. Restore lock focus once keyboard input becomes available.
+    // Restore lock focus once keyboard input becomes available, using the
+    // native refocus path instead of restoring the pre-lock application.
     if (g_pSessionLockManager->isSessionLocked() && (caps & HID_INPUT_CAPABILITY_KEYBOARD) && !(previous & HID_INPUT_CAPABILITY_KEYBOARD))
         refocus();
 }
