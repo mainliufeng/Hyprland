@@ -87,6 +87,7 @@ class CSeatDesktop {
     bool                                         canFocusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr, bool allowFullscreenBlocked = false) const;
     void                                         focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface = nullptr);
     void                                         refocus(uint32_t timeMs = 0, bool keyboard = false);
+    void                                         restoreKeyboardFocus();
     std::string                                  reserveWorkspace(const std::string& name);
     std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false);
     std::vector<uint32_t>                        pressedKeys() const;

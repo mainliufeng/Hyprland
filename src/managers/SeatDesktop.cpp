@@ -121,7 +121,6 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_manager->setGrab(nullptr);
         m_buttons.clear();
         m_deviceButtons.clear();
-        focusWindow(nullptr);
         m_manager->setPointerFocus(nullptr, {});
         m_pointer->resetCursorImage();
     }));
@@ -266,7 +265,9 @@ void CSeatDesktop::setPaused(bool paused, bool composedKeyboard) {
     m_nativeControl = false;
     m_buttons.clear();
     m_deviceButtons.clear();
-    focusWindow(nullptr);
+    // Revoking an input generation withdraws delivered protocol focus; it does
+    // not erase this desktop's selected application. Keep its logical focus
+    // and unmap/destroy listeners so a replacement controller can resume it.
     m_manager->setKeyboardFocus(nullptr);
     m_manager->setPointerFocus(nullptr, {});
     ++m_controlGeneration;
@@ -276,6 +277,8 @@ void CSeatDesktop::setPaused(bool paused, bool composedKeyboard) {
     // this seat's input-method relay instead.
     // Bind this mode to the control generation; pause/resume resets it.
     m_composedKeyboard = !paused && composedKeyboard;
+    if (!paused)
+        restoreKeyboardFocus();
     IPC::Socket2::sock()->postEvent({"seatcontrol", std::format("{},{},{}", protocol()->seatName(), m_controlGeneration, m_paused ? "paused" : "active")});
 }
 
@@ -375,7 +378,8 @@ void CSeatDesktop::attachKeyboard(SP<IKeyboard> keyboard) {
     updateCapabilities();
     if (!m_nativeControl) {
         m_manager->setKeyboard(keyboard);
-        refocus(0, true);
+        restoreKeyboardFocus();
+        refocus();
     }
 }
 
@@ -657,6 +661,33 @@ void CSeatDesktop::focusWindow(PHLWINDOW window, SP<CWLSurfaceResource> surface)
     }
 }
 
+void CSeatDesktop::restoreKeyboardFocus() {
+    if (!inputAllowed())
+        return;
+    // Exclusive layer-shell clients retain the same precedence as native
+    // input. On-demand and noninteractive overlays cannot take focus merely
+    // because a virtual keyboard was recreated under the current pointer.
+    for (const auto level : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP}) {
+        for (const auto& ref : monitor()->m_layerSurfaceLayers[level] | std::views::reverse) {
+            const auto layer = ref.lock();
+            if (layer && layer->mapped() && layer->seatDesktop() == this && layer->m_layerSurface &&
+                layer->m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
+                layer->takeKeyboardFocus();
+                return;
+            }
+        }
+    }
+    if (const auto focused = Desktop::View::CWLSurface::fromResource(m_manager->m_state.keyboardFocus.lock());
+        focused && focused->resource()->m_mapped && focused->keyboardFocusable())
+        return;
+    if (const auto selected = m_window.lock(); selected && canFocusWindow(selected))
+        focusWindow(selected);
+    else if (const auto candidate = workspace() ? workspace()->getFocusCandidate() : nullptr; candidate && canFocusWindow(candidate))
+        focusWindow(candidate);
+    else
+        refocus(0, true);
+}
+
 void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
     if (!inputAllowed())
         return;
@@ -675,6 +706,7 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
     auto                   hitTest = Desktop::viewState()->hitTest();
     Vector2D               local;
     PHLWINDOW              window;
+    PHLLS                  layer;
     SP<CWLSurfaceResource> surface;
     if (!PROTO::data->dndActive(m_manager.get()) && !m_buttons.empty() && m_manager->m_state.pointerFocus) {
         surface = m_manager->m_state.pointerFocus.lock();
@@ -696,8 +728,7 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
                     if (const auto layer = ref.lock(); layer && layer->seatDesktop() == this)
                         layers.emplace_back(ref);
                 }
-                PHLLS found;
-                surface = hitTest.layerSurfaceAt(position, &layers, &local, &found);
+                surface = hitTest.layerSurfaceAt(position, &layers, &local, &layer);
                 if (surface)
                     break;
             }
@@ -727,10 +758,13 @@ void CSeatDesktop::refocus(uint32_t timeMs, bool keyboard) {
     if (keyboard) {
         if (window)
             focusWindow(window, surface);
-        else {
+        else if (!surface)
             focusWindow(nullptr);
+        else if (const auto owner = Desktop::View::CWLSurface::fromResource(surface);
+                 owner && owner->keyboardFocusable() && (!layer || layer->m_layerSurface->m_current.keyboardInteractivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE))
             m_manager->setKeyboardFocus(surface);
-        }
+        // Noninteractive layers and input-method popup surfaces receive pointer
+        // input without displacing the application's keyboard focus.
     }
 }
 

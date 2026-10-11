@@ -294,7 +294,7 @@ void CLayerSurface::onUnmap() {
 
     if (const auto seat = seatDesktop()) {
         if (seat->manager()->m_state.keyboardFocus == m_wlSurface->resource())
-            seat->focusWindow(PMONITOR->m_activeWorkspace->getFocusCandidate());
+            seat->restoreKeyboardFocus();
         seat->refocus();
     } else if (g_pSeatPresentation && g_pSeatPresentation->activeFor(PMONITOR)) {
         // Native presentation keeps the human workspace's focus saved for exit.
@@ -464,7 +464,7 @@ void CLayerSurface::onCommit() {
             takeKeyboardFocus();
         else if (m_layerSurface->m_current.keyboardInteractivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
                  seat->manager()->m_state.keyboardFocus == m_wlSurface->resource())
-            seat->focusWindow(m_monitor->m_activeWorkspace->getFocusCandidate());
+            seat->restoreKeyboardFocus();
     }
     m_keyboardInteractivity = m_layerSurface->m_current.keyboardInteractivity;
 

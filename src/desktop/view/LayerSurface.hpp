@@ -92,6 +92,7 @@ namespace Desktop::View {
         MONITORID                               monitorID();
 
       private:
+        friend class ::CSeatDesktop;
         bool m_mapped = false;
 
         struct {
