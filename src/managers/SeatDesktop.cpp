@@ -16,6 +16,7 @@
 #include "../config/ConfigValue.hpp"
 #include "SeatDesktop.hpp"
 #include "SeatManager.hpp"
+#include "TokenManager.hpp"
 #include "SessionLockManager.hpp"
 #include "input/InputManager.hpp"
 #include "input/InputMethodRelay.hpp"
@@ -132,7 +133,8 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         refocus(0, true);
     }));
     m_listeners.emplace_back(monitor->m_events.disconnect.listen([this, original = PHLMONITORREF{monitor}] { retire(); }));
-    m_socketName        = std::format("seat-{}-{}", name, wl_display_next_serial(g_pCompositor->m_wlDisplay));
+    // Socket nodes may survive an abrupt compositor exit. Keep the namespace independent of seat names and Wayland serials.
+    m_socketName        = std::format("seat-{}", g_pTokenManager->getRandomUUID());
     m_socketPath        = (std::filesystem::path(g_pCompositor->m_hyprTempDataRoot).parent_path() / m_socketName).string();
     sockaddr_un address = {.sun_family = AF_UNIX};
     if (m_socketPath.size() >= sizeof(address.sun_path))
