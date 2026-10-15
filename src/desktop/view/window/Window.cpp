@@ -21,6 +21,8 @@
 #include <fstream>
 #include <string_view>
 #include "Window.hpp"
+#include "../../../protocols/XDGActivation.hpp"
+#include "../../../protocols/XDGForeignV2.hpp"
 #include "WindowEffectsController.hpp"
 #include "WindowFullscreenPolicy.hpp"
 #include "WindowGroupMembership.hpp"
@@ -147,6 +149,7 @@ void CWindow::attachBackendListeners() {
     m_backendListeners.configureRequest  = m_backend->m_events.configureRequest.listen([this](const auto& box) { onConfigureRequest(box); });
     m_backendListeners.geometryChanged   = m_backend->m_events.geometryChanged.listen([this](const auto& box) { onGeometryChanged(box); });
     m_backendListeners.activationRequest = m_backend->m_events.activationRequest.listen([this] { onActivationRequest(); });
+    m_backendListeners.parentChanged     = m_backend->m_events.parentChanged.listen([this] { onParentChanged(); });
     m_backendListeners.moveRequest       = m_backend->m_events.moveRequest.listen([this](SP<CWLSeatResource> seat) { onMoveRequest(seat); });
     m_backendListeners.resizeRequest     = m_backend->m_events.resizeRequest.listen([this](SP<CWLSeatResource> seat, eBackendResizeEdge edge) { onResizeRequest(seat, edge); });
     m_backendListeners.newPopup          = m_backend->m_events.newPopup.listen([this](const auto& popup) {
@@ -472,6 +475,8 @@ void CWindow::moveToWorkspace(PHLWORKSPACE pWorkspace) {
     }
 
     m_workspace = pWorkspace;
+    if (m_routeExplicit)
+        m_routeWorkspace = pWorkspace;
     updateFullscreenInputState();
     *m_presentation->alpha(WINDOW_ALPHA_FULLSCREEN) = isBlockedByFullscreen() ? 0.F : 1.F;
 
@@ -487,6 +492,14 @@ void CWindow::moveToWorkspace(PHLWORKSPACE pWorkspace) {
     }
 
     m_swallowing->moveToWorkspace(pWorkspace);
+
+    // Transients follow their actual parent, even when its process remains
+    // connected to another desktop's socket.
+    const auto windows = Desktop::windowState()->windows();
+    for (const auto& child : windows) {
+        if (child != m_self && child->backend().parent() == m_self)
+            child->onParentChanged();
+    }
 
     if (OLDWORKSPACE && OLDWORKSPACE->type() == Workspace::eWorkspaceType::SPECIAL && OLDWORKSPACE->getWindowCount() == 0 && *PCLOSEONLASTSPECIAL) {
         if (const auto PMONITOR = OLDWORKSPACE->m_monitor.lock(); PMONITOR)
@@ -817,11 +830,69 @@ std::unordered_map<std::string, std::string> CWindow::getEnv() {
 }
 
 void CWindow::activate(bool force) {
-    const auto origin = SeatInput::registry() && wlSurface()->resource() ? SeatInput::registry()->forClient(wlSurface()->resource()->client()) : nullptr;
-    activateForSeat(origin && origin->active() ? origin : nullptr, force);
+    onParentChanged();
+    activateForSeat(routingSeat(), force);
+}
+
+CSeatDesktop* CWindow::routingSeat() const {
+    if (const auto parent = m_backend->parent())
+        return parent->routingSeat();
+    if (m_routeExplicit) {
+        for (const auto& seat : SeatInput::registry()->seats()) {
+            if (seat->active() && seat->socketName() == m_routeSeat)
+                return seat.get();
+        }
+        return nullptr;
+    }
+    const auto surface = wlSurface()->resource();
+    return surface ? SeatInput::registry()->forClient(surface->client()) : nullptr;
+}
+
+void CWindow::routeTo(PHLWORKSPACE workspace, CSeatDesktop* seat) {
+    if (const auto parent = m_backend->parent()) {
+        workspace = parent->m_workspace;
+        seat      = parent->routingSeat();
+    }
+    if (!workspace)
+        return;
+    m_routeExplicit  = true;
+    m_routeSeat      = seat ? seat->socketName() : "";
+    m_routeWorkspace = workspace;
+    if (mapped() && m_workspace != workspace) {
+        for (const auto& other : SeatInput::registry()->seats()) {
+            if (other.get() != seat && other->window() == m_self) {
+                other->focusWindow(nullptr);
+                other->refocus();
+            }
+        }
+        if (seat && Desktop::focusState()->window() == m_self)
+            Desktop::focusState()->fullWindowFocus(nullptr, FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        Desktop::globalWindowController()->moveWindowToWorkspace(m_self.lock(), workspace);
+    }
+}
+
+void CWindow::onParentChanged() {
+    if (const auto parent = m_backend->parent())
+        routeTo(parent->m_workspace, parent->routingSeat());
+    if (m_routePending && m_backend->isMapped() && m_routeExplicit) {
+        m_routePending = false;
+        mapWindow();
+    }
 }
 
 void CWindow::activateForSeat(CSeatDesktop* seat, bool force) {
+    if (m_routeExplicit && !m_routeSeat.empty() && !routingSeat())
+        return;
+    if (m_routePending && m_routeExplicit && m_backend->isMapped()) {
+        m_routePending = false;
+        mapWindow();
+    }
+    // Explicit transient parents define ownership even when activation came
+    // through a shared service's connection or a different token source.
+    if (m_backend->parent()) {
+        onParentChanged();
+        seat = routingSeat();
+    }
     if (seat ? !seat->inputAllowed() || seat->window() == m_self : Desktop::focusState()->window() == m_self)
         return;
 
@@ -838,6 +909,11 @@ void CWindow::activateForSeat(CSeatDesktop* seat, bool force) {
     if (!m_isMapped) {
         LOG(Log::DEBUG, "Ignoring CWindow::activate focus/warp, window is not mapped yet.");
         return;
+    }
+
+    if (seat && m_routeExplicit && seat == routingSeat() && seat->workspace() != m_workspace) {
+        if (seat->switchWorkspace(m_workspace->addressableName()) != "ok")
+            return;
     }
 
     if (m_target->floating())
@@ -1166,9 +1242,30 @@ void CWindow::mapWindow() {
     static auto PINITIALWSTRACKING = CConfigValue<Config::INTEGER>("misc:initial_workspace_tracking");
     static auto PAUTOGROUP         = CConfigValue<Config::INTEGER>("group:auto_group");
 
-    const auto  ORIGIN   = SeatInput::registry() && wlSurface()->resource() ? SeatInput::registry()->forClient(wlSurface()->resource()->client()) : nullptr;
-    const auto  SEAT     = ORIGIN && ORIGIN->active() ? ORIGIN : nullptr;
-    auto        PMONITOR = SEAT ? SEAT->monitor() : Desktop::focusState()->monitor();
+    if (m_isMapped)
+        return;
+    const auto surface = wlSurface()->resource();
+    if (const auto parent = m_backend->parent())
+        routeTo(parent->m_workspace, parent->routingSeat());
+    else if (!m_routeExplicit && surface && PROTO::activation) {
+        if (const auto route = PROTO::activation->routeForClient(surface->client()))
+            routeTo(route->workspace, PROTO::activation->seatForRoute(*route));
+    }
+    // An imported foreign parent already declares this connection a delegated
+    // dialog producer. Do not publish an unattributed surface while it waits
+    // for set_parent_of, regardless of how long that request takes.
+    if (m_backend->parentPending() || (!m_routeExplicit && surface && PROTO::xdgForeignImporter && PROTO::xdgForeignImporter->hasForeignParent(surface->client()))) {
+        m_routePending = true;
+        return;
+    }
+    const auto ORIGIN         = routingSeat();
+    if (ORIGIN && !ORIGIN->active())
+        return;
+    const auto SEAT           = ORIGIN && ORIGIN->active() ? ORIGIN : nullptr;
+    const auto routeWorkspace = m_routeWorkspace.lock();
+    if (m_routeExplicit && (!routeWorkspace || (!m_routeSeat.empty() && !SEAT)))
+        return;
+    auto PMONITOR = routeWorkspace ? routeWorkspace->m_monitor.lock() : SEAT ? SEAT->monitor() : Desktop::focusState()->monitor();
     if (!SEAT && !Desktop::focusState()->monitor()) {
         Desktop::focusState()->rawMonitorFocus(State::monitorState()->query().vec({}).run());
         PMONITOR = Desktop::focusState()->monitor();
@@ -1177,7 +1274,9 @@ void CWindow::mapWindow() {
         LOG(Log::ERR, "mapWindow: no valid monitor/workspace, aborting map for {:x}", (uintptr_t)this);
         return;
     }
-    auto PWORKSPACE = SEAT ? SEAT->workspace() : (PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace);
+    auto PWORKSPACE = routeWorkspace ? routeWorkspace :
+        SEAT                         ? SEAT->workspace() :
+                                       (PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace);
     m_monitor       = PMONITOR;
     m_workspace     = PWORKSPACE;
     m_isMapped      = true;
@@ -1252,7 +1351,7 @@ void CWindow::mapWindow() {
         SFullscreenRequestSuppression fullscreenSuppression;
         m_requestSuppression = {};
 
-        if (!SEAT && !m_ruleApplicator->static_.monitor.empty()) {
+        if (!m_routeExplicit && !SEAT && !m_ruleApplicator->static_.monitor.empty()) {
             const auto& MONITORSTR = m_ruleApplicator->static_.monitor;
             if (MONITORSTR == "unset")
                 m_monitor = PMONITOR;
@@ -1372,7 +1471,7 @@ void CWindow::mapWindow() {
 
     CVarList2 WORKSPACEARGS = CVarList2(std::move(requestedWorkspace), 0, ' ', false, false);
 
-    if (!SEAT && (requestedWorkspaceTarget || !WORKSPACEARGS[0].empty())) {
+    if (!m_routeExplicit && !SEAT && (requestedWorkspaceTarget || !WORKSPACEARGS[0].empty())) {
         State::Workspace::STarget target;
         if (WORKSPACEARGS.contains("silent"))
             workspaceSilent = true;
@@ -1420,7 +1519,7 @@ void CWindow::mapWindow() {
 
     if (m_fullscreenPolicy->requestSuppression().fullscreenOutput)
         requestedFSMonitor = MONITOR_INVALID;
-    else if (!SEAT && requestedFSMonitor != MONITOR_INVALID) {
+    else if (!m_routeExplicit && !SEAT && requestedFSMonitor != MONITOR_INVALID) {
         if (const auto PM = State::monitorState()->query().id(requestedFSMonitor).run(); PM)
             m_monitor = PM;
 
@@ -1436,7 +1535,11 @@ void CWindow::mapWindow() {
         LOG(Log::DEBUG, "Requested monitor, applying to {:mw}", m_self.lock());
     }
 
-    if (SEAT) {
+    if (routeWorkspace) {
+        m_workspace = routeWorkspace;
+        m_monitor   = routeWorkspace->m_monitor.lock();
+        PWORKSPACE  = routeWorkspace;
+    } else if (SEAT) {
         m_monitor = SEAT->monitor();
         if (!m_workspace || m_workspace->monitor() != SEAT->monitor())
             m_workspace = SEAT->workspace();
@@ -1617,9 +1720,15 @@ void CWindow::mapWindow() {
         m_workspace->updateWindows();
 
     Event::bus()->m_events.window.openLate.emit(m_self.lock());
+    const auto windows = Desktop::windowState()->windows();
+    for (const auto& child : windows) {
+        if (child != m_self && child->backend().parent() == m_self)
+            child->onParentChanged();
+    }
 }
 
 void CWindow::unmapWindow() {
+    m_routePending = false;
     LOG(Log::DEBUG, "{:c} unmapped", m_self.lock());
 
     static auto PEXITRETAINSFS = CConfigValue<Config::INTEGER>("misc:exit_window_retains_fullscreen");

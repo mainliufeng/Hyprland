@@ -7,6 +7,8 @@
 #include "../helpers/MiscFunctions.hpp"
 #include "../workspace/RegularWorkspace.hpp"
 #include "../protocols/core/Seat.hpp"
+#include "../desktop/state/FocusState.hpp"
+#include "../output/Monitor.hpp"
 #include <map>
 #include <format>
 
@@ -17,6 +19,7 @@ struct SActionContext {
     uint64_t        generation = 0, lockEpoch = 0;
     Time::steady_tp created;
     bool            readonly = false;
+    PHLWORKSPACEREF workspace;
 };
 static std::map<std::string, SActionContext> contexts;
 static uint64_t                              nextContext = 0;
@@ -36,12 +39,12 @@ SeatInput::CActionScope::~CActionScope() {
     physicalSource = m_previousPhysical;
 }
 
-std::string SeatInput::createContext(const std::string& owner) {
+std::string SeatInput::createContext(const std::string& owner, bool usePresentation) {
     std::erase_if(contexts, [](const auto& item) { return Time::steadyNow() - item.second.created >= std::chrono::seconds(5); });
     if (!SeatInput::registry() || contexts.size() >= 1024 || (g_pSessionLockManager->isSessionLocked() && !g_pSessionLockManager->allowsSeatInput(current())))
         return "";
     auto       seat = current();
-    const bool view = physical() && SeatInput::presentation() && SeatInput::presentation()->active();
+    const bool view = usePresentation && physical() && SeatInput::presentation() && SeatInput::presentation()->active();
     if (view)
         seat = SeatInput::presentation()->seat();
     SActionContext context{.owner         = owner,
@@ -53,7 +56,9 @@ std::string SeatInput::createContext(const std::string& owner) {
                            .lockEpoch     = g_pSessionLockManager->lockEpoch(),
                            .created       = Time::steadyNow(),
                            .readonly      = view && !SeatInput::presentation()->controlling()};
-    auto           id = std::format("{}-{}", g_pCompositor->m_instanceSignature, ++nextContext);
+    const auto     monitor = Desktop::focusState()->monitor();
+    context.workspace      = view ? SeatInput::presentation()->workspace() : seat ? seat->workspace() : monitor ? monitor->getCurrentWorkspace() : nullptr;
+    auto id                = std::format("{}-{}", g_pCompositor->m_instanceSignature, ++nextContext);
     contexts.emplace(id, std::move(context));
     return id;
 }
@@ -86,4 +91,9 @@ CSeatDesktop* SeatInput::contextSeat(const std::string& id) {
 bool SeatInput::contextReadonly(const std::string& id) {
     const auto found = contexts.find(id);
     return found == contexts.end() || found->second.readonly;
+}
+
+PHLWORKSPACE SeatInput::contextWorkspace(const std::string& id) {
+    const auto found = contexts.find(id);
+    return found == contexts.end() ? nullptr : found->second.workspace.lock();
 }

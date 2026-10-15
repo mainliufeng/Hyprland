@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <algorithm>
 #include <wayland-server.h>
 #include "protocols/core/Compositor.hpp"
 
@@ -194,4 +195,9 @@ void CXDGForeignImporterProtocolV2::onImporterDestroyed(CZxdgImporterV2* importe
 
 void CXDGForeignImporterProtocolV2::destroyImported(CXDGImportedResourceV2* imported) {
     std::erase_if(m_imports, [imported](const auto& other) { return imported == other.get(); });
+}
+
+bool CXDGForeignImporterProtocolV2::hasForeignParent(wl_client* client) const {
+    return std::ranges::any_of(m_imports,
+                               [client](const auto& imported) { return imported->m_resource->client() == client && !imported->m_invalid && !imported->m_exported.expired(); });
 }

@@ -130,6 +130,7 @@ class CXDGToplevelResource {
         CSignalT<>                          sizeLimitsChanged;
         CSignalT<>                          stateChanged;    // maximized, fs, minimized, etc.
         CSignalT<>                          metadataChanged; // title, appid
+        CSignalT<>                          parentChanged;
         CSignalT<SXDGToplevelMoveRequest>   requestMove;
         CSignalT<SXDGToplevelResizeRequest> requestResize;
         CSignalT<>                          destroy; // only the role

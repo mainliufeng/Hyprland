@@ -8,6 +8,10 @@ IWindowBackend::IWindowBackend() = default;
 
 IWindowBackend::~IWindowBackend() = default;
 
+bool IWindowBackend::parentPending() const {
+    return false;
+}
+
 bool IWindowBackend::isX11() const {
     return type() == eBackendType::WINDOW_BACKEND_X11;
 }

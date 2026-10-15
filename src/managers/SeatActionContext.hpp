@@ -1,13 +1,15 @@
 #pragma once
 #include <optional>
 #include <string>
+#include "../desktop/DesktopTypes.hpp"
 class CSeatDesktop;
 namespace SeatInput {
     CSeatDesktop* current();
     bool          physical();
-    std::string   createContext(const std::string& owner = "");
+    std::string   createContext(const std::string& owner = "", bool usePresentation = true);
     std::string   validateContext(const std::string& id, const std::string& owner = "");
     CSeatDesktop* contextSeat(const std::string& id);
+    PHLWORKSPACE  contextWorkspace(const std::string& id);
     bool          contextReadonly(const std::string& id);
     class CActionScope {
       public:

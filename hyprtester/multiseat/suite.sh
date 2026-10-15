@@ -4,6 +4,7 @@ set -euo pipefail
 source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$source_dir/fixtures.sh"
 case "${1:-}" in
+    routing) "$HYPRLAND_TEST_PYTHON" "$source_dir/routing.py" ;;
     controller) "$HYPRLAND_TEST_PYTHON" "$source_dir/generic-controller.py" ;;
     multiseat)
         "$HYPRLAND_TEST_PYTHON" "$source_dir/probe.py"

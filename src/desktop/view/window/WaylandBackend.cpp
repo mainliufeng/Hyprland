@@ -164,6 +164,7 @@ CWaylandBackend::CWaylandBackend(SP<CXDGSurfaceResource> resource) : m_resource(
     const auto TOPLEVEL = resource->m_toplevel.lock();
     if (TOPLEVEL) {
         m_listeners.metadata   = TOPLEVEL->m_events.metadataChanged.listen([this] { updateMetadata(true); });
+        m_listeners.parent     = TOPLEVEL->m_events.parentChanged.listen([this] { m_events.parentChanged.emit(); });
         m_listeners.state      = TOPLEVEL->m_events.stateChanged.listen([this] {
             const auto RESOURCE = m_resource.lock();
             const auto TOPLEVEL = RESOURCE ? RESOURCE->m_toplevel.lock() : nullptr;
@@ -240,6 +241,12 @@ PHLWINDOW CWaylandBackend::parent() const {
 
     const auto PARENT = TOPLEVEL->m_parent->m_window.lock();
     return validMapped(PARENT) ? PARENT : nullptr;
+}
+
+bool CWaylandBackend::parentPending() const {
+    const auto resource = m_resource.lock();
+    const auto toplevel = resource ? resource->m_toplevel.lock() : nullptr;
+    return toplevel && toplevel->m_parent && !parent();
 }
 
 SBackendClientID CWaylandBackend::clientID() const {

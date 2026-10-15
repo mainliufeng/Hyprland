@@ -104,9 +104,10 @@ namespace Desktop::View {
         virtual bool                   isMapped() const = 0;
         virtual eBackendType           type() const     = 0;
         bool                           isX11() const;
-        virtual pid_t                  pid() const      = 0;
-        virtual SP<CWLSurfaceResource> surface() const  = 0;
-        virtual PHLWINDOW              parent() const   = 0;
+        virtual pid_t                  pid() const     = 0;
+        virtual SP<CWLSurfaceResource> surface() const = 0;
+        virtual PHLWINDOW              parent() const  = 0;
+        virtual bool                   parentPending() const;
         virtual SBackendClientID       clientID() const = 0;
 
         virtual bool                   initialCommit() const                    = 0;
@@ -146,6 +147,7 @@ namespace Desktop::View {
             CSignalT<CBox>                                    configureRequest;
             CSignalT<CBox>                                    geometryChanged;
             CSignalT<>                                        activationRequest;
+            CSignalT<>                                        parentChanged;
             CSignalT<SP<CWLSeatResource>>                     moveRequest;
             CSignalT<SP<CWLSeatResource>, eBackendResizeEdge> resizeRequest;
             CSignalT<>                                        pong;

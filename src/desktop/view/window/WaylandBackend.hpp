@@ -16,6 +16,7 @@ namespace Desktop::View {
         pid_t                  pid() const override;
         SP<CWLSurfaceResource> surface() const override;
         PHLWINDOW              parent() const override;
+        bool                   parentPending() const override;
         SBackendClientID       clientID() const override;
 
         bool                   initialCommit() const override;
@@ -78,6 +79,7 @@ namespace Desktop::View {
             CHyprSignalListener destroy;
             CHyprSignalListener ack;
             CHyprSignalListener metadata;
+            CHyprSignalListener parent;
             CHyprSignalListener state;
             CHyprSignalListener sizeLimits;
             CHyprSignalListener move;

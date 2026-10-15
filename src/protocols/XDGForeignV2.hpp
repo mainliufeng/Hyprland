@@ -81,6 +81,7 @@ class CXDGForeignImporterProtocolV2 : public IWaylandProtocol {
     CXDGForeignImporterProtocolV2(const wl_interface* iface, const int& ver, const std::string& name);
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) override;
+    bool         hasForeignParent(wl_client* client) const;
 
   private:
     void                                    destroyImported(CXDGImportedResourceV2*);

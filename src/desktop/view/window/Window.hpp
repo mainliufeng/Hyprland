@@ -225,6 +225,9 @@ namespace Desktop::View {
         const std::string&         workspaceAddress() const;
         void                       activate(bool force = false);
         void                       activateForSeat(CSeatDesktop* seat, bool force = false);
+        CSeatDesktop*              routingSeat() const;
+        void                       routeTo(PHLWORKSPACE workspace, CSeatDesktop* seat);
+        void                       onParentChanged();
         bool                       clampWindowSize(const std::optional<Vector2D> minSize, const std::optional<Vector2D> maxSize);
         float                      getScrollMouse();
         float                      getScrollTouchpad();
@@ -282,11 +285,16 @@ namespace Desktop::View {
         void         unmanagedSetGeometry(const CBox& box);
         virtual void onInputBlockStateUpdated(bool blocked) override;
         // For hidden windows and stuff
-        bool        m_hidden    = false;
-        bool        m_suspended = false;
-        bool        m_isMapped  = false;
-        std::string m_lastWorkspaceAddress;
-        bool        m_lastWorkspaceSpecial = false;
+        bool m_hidden    = false;
+        bool m_suspended = false;
+        bool m_isMapped  = false;
+        // Window ownership outlives a transient parent/import handle.
+        bool            m_routeExplicit = false;
+        bool            m_routePending  = false;
+        std::string     m_routeSeat;
+        PHLWORKSPACEREF m_routeWorkspace;
+        std::string     m_lastWorkspaceAddress;
+        bool            m_lastWorkspaceSpecial = false;
 
         struct {
             bool activate            = false;
@@ -314,6 +322,7 @@ namespace Desktop::View {
             CHyprSignalListener configureRequest;
             CHyprSignalListener geometryChanged;
             CHyprSignalListener activationRequest;
+            CHyprSignalListener parentChanged;
             CHyprSignalListener moveRequest;
             CHyprSignalListener resizeRequest;
             CHyprSignalListener newPopup;

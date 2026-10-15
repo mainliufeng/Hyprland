@@ -358,6 +358,7 @@ void CXDGToplevelResource::setNewParent(SP<CXDGToplevelResource> newParent) {
             m_self->m_window->m_state |= Desktop::View::WINDOW_STATE_PINNED;
     }
     LOG(Log::DEBUG, "Toplevel {:x} sets parent to {:x}{}", (uintptr_t)this, (uintptr_t)newParent.get(), (oldParent ? std::format(" (was {:x})", (uintptr_t)oldParent.get()) : ""));
+    m_events.parentChanged.emit();
 }
 
 CXDGToplevelResource::~CXDGToplevelResource() {

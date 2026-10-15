@@ -20,6 +20,7 @@
 #include "../../desktop/view/window/Window.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../protocols/core/Seat.hpp"
+#include "../../protocols/XDGActivation.hpp"
 #include "../../pointer/PointerManager.hpp"
 #include "../../keybinds/Manager.hpp"
 #include "../../keybinds/Resolver.hpp"
@@ -328,6 +329,37 @@ static std::string primaryDesktopRequest(eHyprCtlOutputFormat format, const CVar
 
 std::string IPC::Socket1::seatRequest(eOutputFormat format, std::string request) {
     CVarList args(request, 0, ' ');
+    if ((args.size() == 6 || args.size() == 7) && args[1] == "route-context") {
+        const auto seat = args[2] == "main" ? nullptr : SeatInput::registry()->forName(args[2]);
+        if (args[2] != "main" && (!seat || !seat->active() || !seat->inputAllowed() || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4]))
+            return "stale or unavailable source desktop";
+        if (g_pSessionLockManager->isSessionLocked() && !g_pSessionLockManager->allowsSeatInput(seat))
+            return "source desktop is locked";
+        SeatInput::CActionScope scope(seat, false);
+        const auto              context   = SeatInput::createContext("", false);
+        auto                    workspace = SeatInput::contextWorkspace(context);
+        if (!seat && args.size() == 7 && args[6] != "-") {
+            const auto output = State::monitorState()->query().name(args[6]).run();
+            if (!output || !output->m_enabled || SeatInput::registry()->isPrivateOutput(output))
+                return "source output unavailable";
+            workspace = output->getCurrentWorkspace();
+        }
+        if (!workspace || (args[5] != "-" && workspace->addressableName() != args[5]))
+            return "source workspace changed";
+        const auto token = PROTO::activation->createActionToken(context, workspace);
+        if (token.empty())
+            return "source action unavailable";
+        return std::format("{{\"context\":\"{}\",\"token\":\"{}\",\"desktop\":\"{}\",\"workspace\":\"{}\"}}", escapeJSONStrings(context), escapeJSONStrings(token),
+                           escapeJSONStrings(args[2]), escapeJSONStrings(workspace->addressableName()));
+    }
+    if (args.size() == 4 && args[1] == "route-client") {
+        pid_t      pid    = 0;
+        const auto value  = args[3];
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), pid);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || pid <= 1)
+            return "invalid launch process";
+        return PROTO::activation->registerLaunch(args[2], pid);
+    }
     if (request.starts_with("seat configure "))
         return SeatConfig::manager()->configure(request.substr(std::string{"seat configure "}.size()));
     if (args.size() == 3 && args[1] == "configuration-renew")
@@ -371,7 +403,7 @@ std::string IPC::Socket1::seatRequest(eOutputFormat format, std::string request)
         } catch (const std::exception& error) { return std::format("management display creation failed: {}", error.what()); }
     }
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","management-display-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","physical-input-target-v2","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1","owned-seat-action-context-v1","authorized-seat-snapshot-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","management-display-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","physical-input-target-v2","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1","owned-seat-action-context-v1","authorized-seat-snapshot-v1","desktop-action-routing-v1"]})";
     if (args.size() == 7 && args[1] == "present")
         return SeatInput::presentation()->show(args[2], args[3], State::monitorState()->query().name(args[4]).run(), args[5], args[6]);
     if (args.size() == 3 && args[1] == "presentation")
