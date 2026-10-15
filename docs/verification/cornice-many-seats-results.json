@@ -1,0 +1,253 @@
+[
+  {
+    "test": "private runtime",
+    "observed": {
+      "runtime": "/tmp/hms-exmq9u1l",
+      "no_drm": true,
+      "host_devices_disabled": 11
+    }
+  },
+  {
+    "test": "hyprctl seat API",
+    "observed": "private instance verified"
+  },
+  {
+    "test": "registry",
+    "observed": {
+      "seats": [
+        "seat_name=Hyprland"
+      ],
+      "agent_seats": [
+        "seat_name=agent"
+      ],
+      "fork_pid": 1204501
+    }
+  },
+  {
+    "test": "independent input and workspace",
+    "observed": {
+      "before": {
+        "cursor": {
+          "x": 300,
+          "y": 300
+        },
+        "window": "human-window",
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1",
+          "monitor": "human",
+          "monitorID": 0,
+          "windows": 1,
+          "hasfullscreen": false,
+          "lastwindow": "0x55ff787829f0",
+          "lastwindowtitle": "human-window",
+          "ispersistent": false,
+          "tiledLayout": "dwindle"
+        },
+        "monitors": [
+          [
+            "human",
+            {
+              "address": "1",
+              "id": 1,
+              "type": "normal",
+              "name": "1"
+            }
+          ]
+        ]
+      },
+      "after": {
+        "cursor": {
+          "x": 300,
+          "y": 300
+        },
+        "window": "human-window",
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1",
+          "monitor": "human",
+          "monitorID": 0,
+          "windows": 1,
+          "hasfullscreen": false,
+          "lastwindow": "0x55ff787829f0",
+          "lastwindowtitle": "human-window",
+          "ispersistent": false,
+          "tiledLayout": "dwindle"
+        },
+        "monitors": [
+          [
+            "human",
+            {
+              "address": "1",
+              "id": 1,
+              "type": "normal",
+              "name": "1"
+            }
+          ]
+        ]
+      },
+      "human_text": "HUMAN",
+      "agent_text": "AGENT",
+      "seat": [
+        {
+          "name": "agent",
+          "output": "agent",
+          "display": "seat-agent-5",
+          "cursor": [
+            1630,
+            330
+          ],
+          "workspace": "2",
+          "window": "agent-window"
+        }
+      ]
+    }
+  },
+  {
+    "test": "four simultaneous seats",
+    "observed": {
+      "human": "HUMANHHHHHHHHHHHHHHHHHHHH",
+      "agents": [
+        "AGENTAAAAAAAAAAAAAAAAAAAA",
+        "EXTRA1XXXXXXXXXXXXXXXXXXXX",
+        "EXTRA2YYYYYYYYYYYYYYYYYYYY"
+      ],
+      "seats": [
+        {
+          "name": "agent",
+          "output": "agent",
+          "display": "seat-agent-5",
+          "cursor": [
+            1580,
+            300
+          ],
+          "workspace": "2",
+          "window": "agent-window"
+        },
+        {
+          "name": "extra1",
+          "output": "extra1",
+          "display": "seat-extra1-79",
+          "cursor": [
+            2860,
+            300
+          ],
+          "workspace": "extra1-alternate",
+          "window": ""
+        },
+        {
+          "name": "extra2",
+          "output": "extra2",
+          "display": "seat-extra2-118",
+          "cursor": [
+            4140,
+            300
+          ],
+          "workspace": "extra2-alternate",
+          "window": ""
+        }
+      ],
+      "primary_state_unchanged": true,
+      "null_pointer_seat_routed_by_connection": true
+    }
+  },
+  {
+    "test": "interleaved input",
+    "observed": {
+      "rounds": 20,
+      "human_text": "HUMANHHHHHHHHHHHHHHHHHHHH",
+      "agent_text": "AGENTAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  {
+    "test": "simultaneous input",
+    "observed": {
+      "rounds_per_seat": 20,
+      "exact_text": true
+    }
+  },
+  {
+    "test": "data-control clipboard",
+    "observed": "isolated"
+  },
+  {
+    "test": "primary selection",
+    "observed": "isolated"
+  },
+  {
+    "test": "GTK copy and paste",
+    "observed": "isolated"
+  },
+  {
+    "test": "pointer click recipients",
+    "observed": "isolated"
+  },
+  {
+    "test": "held Shift isolation",
+    "observed": true
+  },
+  {
+    "test": "agent popup grab while human types",
+    "observed": true
+  },
+  {
+    "test": "real GTK drag while human types",
+    "observed": true
+  },
+  {
+    "test": "two real input methods into GTK entries",
+    "observed": "isolated"
+  },
+  {
+    "test": "two simultaneous input-method keyboard grabs",
+    "observed": "isolated"
+  },
+  {
+    "test": "real session lock rejects agent, accepts human, restores agent",
+    "observed": true
+  },
+  {
+    "test": "wl_seat released before input children",
+    "observed": true
+  },
+  {
+    "test": "layer-shell and Hyprland focus grab",
+    "observed": "isolated"
+  },
+  {
+    "test": "agent xdg-activation token and focus",
+    "observed": "isolated"
+  },
+  {
+    "test": "locked pointer, relative motion and confinement",
+    "observed": "isolated"
+  },
+  {
+    "test": "client-initiated window move and resize",
+    "observed": "isolated"
+  },
+  {
+    "test": "retired seat cannot inject into primary",
+    "observed": true
+  },
+  {
+    "test": "held input retirement and same-name recreation",
+    "observed": "old devices inert"
+  },
+  {
+    "test": "disconnected seat collection",
+    "observed": "three cycles passed"
+  },
+  {
+    "test": "upstream single-seat integration",
+    "observed": "passed"
+  },
+  {
+    "test": "result",
+    "observed": "passed"
+  }
+]
