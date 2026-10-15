@@ -114,6 +114,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
         m_events.unlock.emit();
 
         m_sessionLock.reset();
+        IPC::Socket2::sock()->postEvent({"sessionlock", "unlocked"});
         g_pInputManager->refocus();
 
         for (auto const& m : State::monitorState()->monitors())
@@ -275,6 +276,7 @@ void CSessionLockManager::clearSessionLock() {
     m_scoped = false;
     m_events.unlock.emit();
     m_sessionLock = {};
+    IPC::Socket2::sock()->postEvent({"sessionlock", "unlocked"});
 }
 
 void CSessionLockManager::forceUnlock() {
@@ -322,6 +324,7 @@ void CSessionLockManager::forceLock() {
     m_scoped = false;
     advanceLockEpoch();
     PROTO::sessionLock->forceLock();
+    IPC::Socket2::sock()->postEvent({"sessionlock", "locked"});
     m_events.lock.emit();
 }
 
