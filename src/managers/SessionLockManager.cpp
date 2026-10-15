@@ -10,6 +10,7 @@
 #include "../managers/input/InputManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../state/MonitorState.hpp"
+#include "../ipc/s2/S2.hpp"
 #include <algorithm>
 #include <ranges>
 
@@ -81,6 +82,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
         m_events.unlock.emit();
 
         m_sessionLock.reset();
+        IPC::Socket2::sock()->postEvent({"sessionlock", "unlocked"});
         g_pInputManager->refocus();
 
         for (auto const& m : State::monitorState()->monitors())
@@ -95,6 +97,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
             g_pHyprRenderer->damageMonitor(m);
     });
 
+    IPC::Socket2::sock()->postEvent({"sessionlock", "locked"});
     m_events.lock.emit();
 
     Desktop::focusState()->rawSurfaceFocus(nullptr);
@@ -223,6 +226,7 @@ bool CSessionLockManager::clientDenied() {
 void CSessionLockManager::clearSessionLock() {
     m_events.unlock.emit();
     m_sessionLock = {};
+    IPC::Socket2::sock()->postEvent({"sessionlock", "unlocked"});
 }
 
 void CSessionLockManager::forceUnlock() {
@@ -238,6 +242,7 @@ void CSessionLockManager::forceUnlock() {
 
 void CSessionLockManager::forceLock() {
     PROTO::sessionLock->forceLock();
+    IPC::Socket2::sock()->postEvent({"sessionlock", "locked"});
     m_events.lock.emit();
 }
 
