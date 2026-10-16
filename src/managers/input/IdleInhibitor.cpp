@@ -66,6 +66,9 @@ void CInputManager::recheckIdleInhibitorStatus() {
 }
 
 bool CInputManager::isWindowInhibiting(const PHLWINDOW& w, bool onlyHl) {
+    if (!w)
+        return false;
+
     if (w->m_ruleApplicator->idleInhibitMode().valueOrDefault() == Desktop::Rule::IDLEINHIBIT_ALWAYS)
         return true;
 
@@ -79,12 +82,19 @@ bool CInputManager::isWindowInhibiting(const PHLWINDOW& w, bool onlyHl) {
     if (onlyHl)
         return false;
 
+    // Retained or not-yet-mapped windows can outlive their wl_surface. IPC
+    // includes those windows with clients -a; only traverse a live resource.
+    const auto SURFACE  = w->wlSurface();
+    const auto RESOURCE = SURFACE ? SURFACE->resource() : nullptr;
+    if (!RESOURCE)
+        return false;
+
     for (auto const& ii : m_idleInhibitors) {
         if (ii->nonDesktop || !ii->inhibitor)
             continue;
 
         bool isInhibiting = false;
-        w->wlSurface()->resource()->breadthfirst(
+        RESOURCE->breadthfirst(
             [&ii](SP<CWLSurfaceResource> surf, const Vector2D& pos, void* data) {
                 if (ii->inhibitor->m_surface != surf)
                     return;

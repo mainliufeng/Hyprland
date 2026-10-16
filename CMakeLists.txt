@@ -791,7 +791,7 @@ if(WITH_MULTISEAT_TESTS)
   endif()
   set(MULTISEAT_RUNNER "${CMAKE_CURRENT_SOURCE_DIR}/hyprtester/multiseat/sandbox.sh")
   set(MULTISEAT_PLUGIN "${CMAKE_CURRENT_SOURCE_DIR}/hyprtester/plugin/hyprtestplugin.so")
-  foreach(suite controller lifecycle dispatcher multiseat single-seat routing)
+  foreach(suite controller lifecycle dispatcher multiseat single-seat routing idle-query)
     if(suite STREQUAL "multiseat" OR suite STREQUAL "single-seat")
       add_test(NAME "integration.${suite}" COMMAND ${CMAKE_COMMAND} -E env ${MULTISEAT_TEST_ENV} ${MULTISEAT_RUNNER} ${suite}
         $<TARGET_FILE:Hyprland> $<TARGET_FILE:hyprtester> ${MULTISEAT_PLUGIN} $<TARGET_FILE_DIR:hyprtester>)
