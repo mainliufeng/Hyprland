@@ -1,0 +1,672 @@
+[
+  {
+    "description": "cross-workspace: page really loads in the unchanged browser window/workspace",
+    "evidence": {
+      "before": {
+        "address": "0x55e73863fe80",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "google-chrome",
+        "title": "Activation browser initial - Google Chrome",
+        "initialClass": "google-chrome",
+        "initialTitle": "Activation browser initial - Google Chrome",
+        "pid": 140,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000000"
+      },
+      "after": {
+        "address": "0x55e73863fe80",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "google-chrome",
+        "title": "cross-workspace - Google Chrome",
+        "initialClass": "google-chrome",
+        "initialTitle": "Activation browser initial - Google Chrome",
+        "pid": 140,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000000"
+      },
+      "activeWorkspace": {
+        "address": "1",
+        "id": 1,
+        "type": "normal",
+        "name": "1",
+        "monitor": "physical",
+        "monitorID": 0,
+        "windows": 1,
+        "hasfullscreen": false,
+        "lastwindow": "0x55e73863fe80",
+        "lastwindowtitle": "cross-workspace - Google Chrome",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+      },
+      "url": "http://127.0.0.1:8765/cross-workspace.html",
+      "browserVersion": "Chrome/154.0.8037.57",
+      "focusOnActivate": true
+    }
+  },
+  {
+    "description": "same-workspace: page really loads in the unchanged browser window/workspace",
+    "evidence": {
+      "before": {
+        "address": "0x55e73863fe80",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "google-chrome",
+        "title": "Activation browser initial - Google Chrome",
+        "initialClass": "google-chrome",
+        "initialTitle": "Activation browser initial - Google Chrome",
+        "pid": 140,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000000"
+      },
+      "after": {
+        "address": "0x55e73863fe80",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          613,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "google-chrome",
+        "title": "same-workspace - Google Chrome",
+        "initialClass": "google-chrome",
+        "initialTitle": "Activation browser initial - Google Chrome",
+        "pid": 140,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000000"
+      },
+      "activeWorkspace": {
+        "address": "1",
+        "id": 1,
+        "type": "normal",
+        "name": "1",
+        "monitor": "physical",
+        "monitorID": 0,
+        "windows": 2,
+        "hasfullscreen": false,
+        "lastwindow": "0x55e73863fe80",
+        "lastwindowtitle": "same-workspace - Google Chrome",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+      },
+      "url": "http://127.0.0.1:8765/same-workspace.html",
+      "browserVersion": "Chrome/154.0.8037.57",
+      "focusOnActivate": true
+    }
+  },
+  {
+    "description": "urgency-only: page really loads in the unchanged browser window/workspace",
+    "evidence": {
+      "before": {
+        "address": "0x55e73863fe80",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "google-chrome",
+        "title": "Activation browser initial - Google Chrome",
+        "initialClass": "google-chrome",
+        "initialTitle": "Activation browser initial - Google Chrome",
+        "pid": 140,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000000"
+      },
+      "after": {
+        "address": "0x55e73863fe80",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "google-chrome",
+        "title": "urgency-only - Google Chrome",
+        "initialClass": "google-chrome",
+        "initialTitle": "Activation browser initial - Google Chrome",
+        "pid": 140,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 1,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000000"
+      },
+      "activeWorkspace": {
+        "address": "2",
+        "id": 2,
+        "type": "normal",
+        "name": "2",
+        "monitor": "physical",
+        "monitorID": 0,
+        "windows": 1,
+        "hasfullscreen": false,
+        "lastwindow": "0x55e739041ab0",
+        "lastwindowtitle": "Activation source",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+      },
+      "url": "http://127.0.0.1:8765/urgency-only.html",
+      "browserVersion": "Chrome/154.0.8037.57",
+      "focusOnActivate": false
+    }
+  },
+  {
+    "description": "real new browser window maps in requesting workspace",
+    "evidence": {
+      "address": "0x55e7392e7330",
+      "mapped": true,
+      "hidden": false,
+      "visible": true,
+      "acceptsInput": true,
+      "at": [
+        646,
+        21
+      ],
+      "size": [
+        613,
+        758
+      ],
+      "workspace": {
+        "address": "2",
+        "id": 2,
+        "type": "normal",
+        "name": "2"
+      },
+      "floating": false,
+      "monitor": 0,
+      "class": "google-chrome",
+      "title": "Activation new browser - Google Chrome",
+      "initialClass": "google-chrome",
+      "initialTitle": "Activation new browser - Google Chrome",
+      "pid": 140,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 0,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000002"
+    }
+  },
+  {
+    "description": "existing-root activation stays put and token replay is rejected",
+    "evidence": {
+      "address": "0x55e7397f14d0",
+      "mapped": true,
+      "hidden": false,
+      "visible": true,
+      "acceptsInput": true,
+      "at": [
+        646,
+        21
+      ],
+      "size": [
+        613,
+        373
+      ],
+      "workspace": {
+        "address": "1",
+        "id": 1,
+        "type": "normal",
+        "name": "1"
+      },
+      "floating": false,
+      "monitor": 0,
+      "class": "cornice-routing-synthetic",
+      "title": "token-root",
+      "initialClass": "cornice-routing-synthetic",
+      "initialTitle": "token-root",
+      "pid": 656,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 1,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000003"
+    }
+  },
+  {
+    "description": "hide/remap keeps established workspace",
+    "evidence": {
+      "address": "0x55e7397f14d0",
+      "mapped": true,
+      "hidden": false,
+      "visible": true,
+      "acceptsInput": true,
+      "at": [
+        646,
+        406
+      ],
+      "size": [
+        613,
+        373
+      ],
+      "workspace": {
+        "address": "1",
+        "id": 1,
+        "type": "normal",
+        "name": "1"
+      },
+      "floating": false,
+      "monitor": 0,
+      "class": "cornice-routing-synthetic",
+      "title": "token-root",
+      "initialClass": "cornice-routing-synthetic",
+      "initialTitle": "token-root",
+      "pid": 656,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 0,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000003"
+    }
+  },
+  {
+    "description": "fresh pre-map root keeps accepted source workspace",
+    "evidence": {
+      "address": "0x55e7394b7dd0",
+      "mapped": true,
+      "hidden": false,
+      "visible": false,
+      "acceptsInput": true,
+      "at": [
+        646,
+        406
+      ],
+      "size": [
+        613,
+        373
+      ],
+      "workspace": {
+        "address": "2",
+        "id": 2,
+        "type": "normal",
+        "name": "2"
+      },
+      "floating": false,
+      "monitor": 0,
+      "class": "cornice-routing-synthetic",
+      "title": "premap-root",
+      "initialClass": "cornice-routing-synthetic",
+      "initialTitle": "premap-root",
+      "pid": 656,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 0,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000005"
+    }
+  },
+  {
+    "description": "new transient follows parent instead of token workspace",
+    "evidence": {
+      "address": "0x55e7391122f0",
+      "mapped": true,
+      "hidden": false,
+      "visible": false,
+      "acceptsInput": true,
+      "at": [
+        608,
+        368
+      ],
+      "size": [
+        64,
+        64
+      ],
+      "workspace": {
+        "address": "1",
+        "id": 1,
+        "type": "normal",
+        "name": "1"
+      },
+      "floating": true,
+      "monitor": 0,
+      "class": "cornice-routing-synthetic",
+      "title": "child-root",
+      "initialClass": "cornice-routing-synthetic",
+      "initialTitle": "child-root",
+      "pid": 656,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 0,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000006"
+    }
+  },
+  {
+    "description": "human/Agent and Agent A/B activations cannot transfer existing roots or children",
+    "evidence": {
+      "address": "0x55e73859eff0",
+      "mapped": true,
+      "hidden": false,
+      "visible": false,
+      "acceptsInput": true,
+      "at": [
+        21,
+        21
+      ],
+      "size": [
+        1238,
+        758
+      ],
+      "workspace": {
+        "address": "activation-A",
+        "type": "normal",
+        "name": "activation-A"
+      },
+      "floating": false,
+      "monitor": 0,
+      "class": "cornice-routing-synthetic",
+      "title": "agent-root",
+      "initialClass": "cornice-routing-synthetic",
+      "initialTitle": "agent-root",
+      "pid": 656,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 7,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000007"
+    }
+  },
+  {
+    "description": "valid owner activation works while invalid tokens remain rejected",
+    "evidence": {
+      "address": "0x55e73859eff0",
+      "mapped": true,
+      "hidden": false,
+      "visible": false,
+      "acceptsInput": true,
+      "at": [
+        21,
+        21
+      ],
+      "size": [
+        1238,
+        758
+      ],
+      "workspace": {
+        "address": "activation-A",
+        "type": "normal",
+        "name": "activation-A"
+      },
+      "floating": false,
+      "monitor": 0,
+      "class": "cornice-routing-synthetic",
+      "title": "agent-root",
+      "initialClass": "cornice-routing-synthetic",
+      "initialTitle": "agent-root",
+      "pid": 656,
+      "xwayland": false,
+      "pinned": false,
+      "pinFullscreened": false,
+      "fullscreen": 0,
+      "fullscreenClient": 0,
+      "fullscreenHandler": "default",
+      "allowedOverFullscreen": true,
+      "grouped": [],
+      "tags": [],
+      "swallowing": "0x0",
+      "focusHistoryID": 7,
+      "inhibitingIdle": false,
+      "xdgTag": "",
+      "xdgDescription": "",
+      "contentType": "none",
+      "tearingHint": false,
+      "stableId": "18000007"
+    }
+  }
+]

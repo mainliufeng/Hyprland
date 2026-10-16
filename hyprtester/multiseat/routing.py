@@ -134,17 +134,18 @@ try:
     assert window["workspace"]["name"] == "route-B", window
     assert runtime.ctl("activewindow", True)["address"] == original_human
     record("activation before map keeps B source", window)
-    # An explicit parent wins over an unrelated token on the shared child.
+    # A token from another domain cannot activate/transfer a child or root.
+    before_a = runtime.ctl("seat state A", True)["windowAddress"]
     command(service, "activate " + context("B")["token"] + " 0")
     assert client("route-foreign-before")["workspace"]["name"] == "route-A"
-    assert runtime.ctl("seat state A", True)["windowAddress"] == client("route-foreign-before")["address"]
-    record("child activation uses parent A despite token from B", client("route-foreign-before"))
-    # Re-route the parent through standard activation; all mapped transients follow.
+    assert runtime.ctl("seat state A", True)["windowAddress"] == before_a
     command(a, "activate " + context("B")["token"] + " 0")
     for title in ("route-root-A", "route-same-parent", "route-foreign-before", "route-foreign-late"):
-        wait(lambda: client(title)["workspace"]["name"] == "route-B")
-    assert runtime.ctl("seat state B", True)["windowAddress"] == client("route-root-A")["address"]
-    record("moving parent updates same- and cross-connection descendants", [client(title) for title in ("route-root-A", "route-same-parent", "route-foreign-before")])
+        assert client(title)["workspace"]["name"] == "route-A"
+    assert runtime.ctl("seat state A", True)["windowAddress"] == before_a
+    command(service, "activate " + context("A")["token"] + " 0")
+    assert runtime.ctl("seat state A", True)["windowAddress"] == client("route-foreign-before")["address"]
+    record("owner activation works; foreign tokens preserve root and child ownership", client("route-foreign-before"))
     # A real GTK3 file chooser, sharing the primary connection environment,
     # receives B's exported parent before it shows. Its folder is synthetic.
     gtk_flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "gtk+-3.0", "gdk-wayland-3.0"], text=True).split()
@@ -160,12 +161,16 @@ try:
                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     assert select.select([driver.stdout], [], [], 5)[0] and driver.stdout.readline().strip() == "ready"
     runtime.ok("seat focus B address:" + chooser["address"])
+    wait(lambda: runtime.ctl("seat state B", True)["windowAddress"] == chooser["address"])
+    # Focus delivery is asynchronous to the GTK connection. Wait for its
+    # entry focus event before sending the first key, rather than racing it.
+    wait(lambda: (runtime.base / "gtk-entry.focus").exists())
     command(driver, "type chooserB")
     wait(lambda: (runtime.base / "gtk-entry").read_text() == "chooserB")
     assert runtime.ctl("activewindow", True)["address"] == original_human
     record("B can type into the shared GTK chooser without changing human focus", "chooserB")
     command(a, "destroy 0")
-    assert client("route-foreign-before")["workspace"]["name"] == "route-B"
+    assert client("route-foreign-before")["workspace"]["name"] == "route-A"
     record("parent close retains child's last explicit route", client("route-foreign-before"))
     # Bound the guarantee: a producer announcing nothing before map is an
     # ordinary root. A later parent can repair ownership but cannot undo its

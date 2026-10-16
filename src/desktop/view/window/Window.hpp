@@ -225,6 +225,7 @@ namespace Desktop::View {
         const std::string&         workspaceAddress() const;
         void                       activate(bool force = false);
         void                       activateForSeat(CSeatDesktop* seat, bool force = false);
+        void                       activateFromToken(PHLWORKSPACE workspace, CSeatDesktop* seat);
         CSeatDesktop*              routingSeat() const;
         void                       routeTo(PHLWORKSPACE workspace, CSeatDesktop* seat);
         void                       onParentChanged();
@@ -285,9 +286,10 @@ namespace Desktop::View {
         void         unmanagedSetGeometry(const CBox& box);
         virtual void onInputBlockStateUpdated(bool blocked) override;
         // For hidden windows and stuff
-        bool m_hidden    = false;
-        bool m_suspended = false;
-        bool m_isMapped  = false;
+        bool m_hidden       = false;
+        bool m_suspended    = false;
+        bool m_isMapped     = false;
+        bool m_hasPresented = false;
         // Window ownership outlives a transient parent/import handle.
         bool            m_routeExplicit = false;
         bool            m_routePending  = false;

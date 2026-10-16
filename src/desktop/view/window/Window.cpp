@@ -848,6 +848,29 @@ CSeatDesktop* CWindow::routingSeat() const {
     return surface ? SeatInput::registry()->forClient(surface->client()) : nullptr;
 }
 
+void CWindow::activateFromToken(PHLWORKSPACE workspace, CSeatDesktop* seat) {
+    // A source token attributes a new root; it does not authorize moving an
+    // existing window. Parents define child ownership before the first map.
+    if (const auto parent = m_backend->parent()) {
+        if (parent->routingSeat() != seat)
+            return;
+        onParentChanged();
+    } else if (!m_hasPresented)
+        routeTo(workspace, seat);
+    else {
+        if (routingSeat() != seat)
+            return;
+        // Unmap is not a new toplevel lifetime. Pin its previous workspace
+        // before a later buffer so a hidden singleton cannot be re-attributed.
+        if (!mapped())
+            routeTo(State::Workspace::state()->query().address(workspaceAddress()).run(), seat);
+    }
+
+    // Preserve normal urgency/focus-on-activate policy in the owning domain.
+    // In particular, focusing may visit the existing workspace, never move it.
+    activateForSeat(seat);
+}
+
 void CWindow::routeTo(PHLWORKSPACE workspace, CSeatDesktop* seat) {
     if (const auto parent = m_backend->parent()) {
         workspace = parent->m_workspace;
@@ -1258,7 +1281,7 @@ void CWindow::mapWindow() {
         m_routePending = true;
         return;
     }
-    const auto ORIGIN         = routingSeat();
+    const auto ORIGIN = routingSeat();
     if (ORIGIN && !ORIGIN->active())
         return;
     const auto SEAT           = ORIGIN && ORIGIN->active() ? ORIGIN : nullptr;
@@ -1280,6 +1303,7 @@ void CWindow::mapWindow() {
     m_monitor       = PMONITOR;
     m_workspace     = PWORKSPACE;
     m_isMapped      = true;
+    m_hasPresented  = true;
     m_presentation->setAnimatingIn(true);
     const auto METADATA = m_backend->metadata();
     const auto TRAITS   = m_backend->traits();

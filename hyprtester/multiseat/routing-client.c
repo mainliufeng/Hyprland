@@ -76,7 +76,8 @@ int main(void) {
             xdg_toplevel_add_listener(w->top, &top_listener, w);
             xdg_toplevel_set_title(w->top, argument); xdg_toplevel_set_app_id(w->top, "cornice-routing-synthetic");
             wl_surface_commit(w->surface);
-        } else if (sscanf(line, "map %d", &a) == 1) { windows[a].wanted = 1; submit(&windows[a]); }
+        } else if (sscanf(line, "map %d", &a) == 1) { windows[a].wanted = 1; if (!windows[a].configured) wl_surface_commit(windows[a].surface); else submit(&windows[a]); }
+        else if (sscanf(line, "unmap %d", &a) == 1) { windows[a].wanted = 0; windows[a].configured = 0; wl_surface_attach(windows[a].surface, NULL, 0, 0); wl_surface_commit(windows[a].surface); }
         else if (sscanf(line, "export %d", &a) == 1) {
             struct zxdg_exported_v2* object = zxdg_exporter_v2_export_toplevel(exporter, windows[a].surface);
             zxdg_exported_v2_add_listener(object, &exported_listener, NULL);

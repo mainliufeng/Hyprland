@@ -162,8 +162,7 @@ void CXDGActivationProtocol::bindManager(wl_client* client, void* data, uint32_t
             return;
         }
 
-        PWINDOW->routeTo(route.workspace, desktop);
-        PWINDOW->activateForSeat(desktop);
+        PWINDOW->activateFromToken(route.workspace, desktop);
     });
 }
 

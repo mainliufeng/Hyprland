@@ -15,7 +15,7 @@ if [[ -n ${HYPRLAND_TEST_TOOLS_DIR:-} ]]; then
     tools_mount=(--ro-bind "$tools_dir" "$tools_dir")
 fi
 binary=$(realpath "$2")
-case "$suite" in controller|multiseat|lifecycle|dispatcher|single-seat|routing|idle-query) ;; *) echo "Unknown suite: $suite" >&2; exit 2 ;; esac
+case "$suite" in controller|multiseat|lifecycle|dispatcher|single-seat|routing|idle-query|activation) ;; *) echo "Unknown suite: $suite" >&2; exit 2 ;; esac
 [[ -f $binary && -x $binary ]] || { echo "Built compositor required: $binary" >&2; exit 2; }
 for tool in bash sh bwrap systemd-run flock timeout nice dbus-daemon mutter python3 cc pkg-config wayland-scanner realpath env mkdir mktemp; do
     command -v "$tool" >/dev/null || { echo "Missing test dependency: $tool" >&2; exit 2; }
@@ -42,13 +42,20 @@ if [[ $suite == multiseat || $suite == single-seat ]]; then
     hyprctl_path=$(realpath "$hyprctl_path")
     hyprctl_mount=(--ro-bind "$hyprctl_path" /opt/hyprland-test/hyprctl)
 fi
-if [[ $suite == routing || $suite == idle-query ]]; then
+if [[ $suite == routing || $suite == idle-query || $suite == activation ]]; then
     hyprctl_path=${HYPRLAND_TEST_HYPRCTL:-$(dirname "$binary")/hyprctl/hyprctl}
     [[ -f $hyprctl_path && -x $hyprctl_path ]] || { echo 'Routing requires a matching built hyprctl' >&2; exit 2; }
     hyprctl_path=$(realpath "$hyprctl_path")
     hyprctl_mount=(--ro-bind "$hyprctl_path" /opt/hyprland-test/hyprctl)
 fi
 mounts=(--ro-bind "$repo_dir" "$repo_dir" --ro-bind "$binary" /opt/hyprland-test/Hyprland)
+if [[ $suite == activation ]]; then
+    for tool in electron38 grim; do
+        command -v "$tool" >/dev/null || { echo "Activation test requires $tool" >&2; exit 2; }
+    done
+    [[ -x /opt/google/chrome/chrome ]] || { echo 'Real Chrome required' >&2; exit 2; }
+    mounts+=(--ro-bind /opt/google /opt/google)
+fi
 selectors=()
 if [[ $suite == multiseat || $suite == single-seat ]]; then
     [[ $# -ge 5 && ( $suite == single-seat || $# == 5 ) ]] || { echo 'Hyprtester, matching plugin and built client directory are required; only single-seat accepts optional native test names' >&2; exit 2; }

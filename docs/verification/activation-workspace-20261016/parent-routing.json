@@ -1,0 +1,666 @@
+{
+  "checks": [
+    {
+      "description": "A cold root keeps accepted workspace and human focus",
+      "evidence": {
+        "address": "0x5575ac2c4270",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "route-A",
+          "type": "normal",
+          "name": "route-A"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-root-A",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-root-A",
+        "pid": 163,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 1,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000001"
+      }
+    },
+    {
+      "description": "B cold root keeps accepted workspace and human focus",
+      "evidence": {
+        "address": "0x5575ac2948a0",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          21,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "route-B",
+          "type": "normal",
+          "name": "route-B"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-root-B",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-root-B",
+        "pid": 164,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 2,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000002"
+      }
+    },
+    {
+      "description": "same-connection child first publishes with parent",
+      "evidence": {
+        "address": "0x5575ac297950",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          608,
+          368
+        ],
+        "size": [
+          64,
+          64
+        ],
+        "workspace": {
+          "address": "route-A",
+          "type": "normal",
+          "name": "route-A"
+        },
+        "floating": true,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-same-parent",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-same-parent",
+        "pid": 163,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 3,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000003"
+      }
+    },
+    {
+      "description": "cross-connection parent before first buffer",
+      "evidence": {
+        "address": "0x5575ac31ca90",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          608,
+          368
+        ],
+        "size": [
+          64,
+          64
+        ],
+        "workspace": {
+          "address": "route-A",
+          "type": "normal",
+          "name": "route-A"
+        },
+        "floating": true,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-foreign-before",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-foreign-before",
+        "pid": 165,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 4,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000004"
+      }
+    },
+    {
+      "description": "announced foreign producer holds first buffer until late parent",
+      "evidence": {
+        "address": "0x5575ac3281d0",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          608,
+          368
+        ],
+        "size": [
+          64,
+          64
+        ],
+        "workspace": {
+          "address": "route-A",
+          "type": "normal",
+          "name": "route-A"
+        },
+        "floating": true,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-foreign-late",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-foreign-late",
+        "pid": 165,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 5,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000005"
+      }
+    },
+    {
+      "description": "activation before map keeps B source",
+      "evidence": {
+        "address": "0x5575ac3964e0",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          646,
+          21
+        ],
+        "size": [
+          613,
+          758
+        ],
+        "workspace": {
+          "address": "route-B",
+          "type": "normal",
+          "name": "route-B"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-premap-activation",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-premap-activation",
+        "pid": 166,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 6,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000006"
+      }
+    },
+    {
+      "description": "owner activation works; foreign tokens preserve root and child ownership",
+      "evidence": {
+        "address": "0x5575ac31ca90",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          608,
+          368
+        ],
+        "size": [
+          64,
+          64
+        ],
+        "workspace": {
+          "address": "route-A",
+          "type": "normal",
+          "name": "route-A"
+        },
+        "floating": true,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-foreign-before",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-foreign-before",
+        "pid": 165,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 4,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000004"
+      }
+    },
+    {
+      "description": "real GTK3 chooser first maps with cross-connection parent B",
+      "evidence": {
+        "address": "0x5575ac337040",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          39,
+          -183
+        ],
+        "size": [
+          1203,
+          983
+        ],
+        "workspace": {
+          "address": "route-B",
+          "type": "normal",
+          "name": "route-B"
+        },
+        "floating": true,
+        "monitor": 0,
+        "class": "gtk-chooser",
+        "title": "route-gtk-chooser",
+        "initialClass": "gtk-chooser",
+        "initialTitle": "route-gtk-chooser",
+        "pid": 173,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 7,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000007"
+      }
+    },
+    {
+      "description": "B can type into the shared GTK chooser without changing human focus",
+      "evidence": "chooserB"
+    },
+    {
+      "description": "parent close retains child's last explicit route",
+      "evidence": {
+        "address": "0x5575ac31ca90",
+        "mapped": true,
+        "hidden": false,
+        "visible": true,
+        "acceptsInput": true,
+        "at": [
+          608,
+          368
+        ],
+        "size": [
+          64,
+          64
+        ],
+        "workspace": {
+          "address": "route-A",
+          "type": "normal",
+          "name": "route-A"
+        },
+        "floating": true,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-foreign-before",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-foreign-before",
+        "pid": 165,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 3,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000004"
+      }
+    },
+    {
+      "description": "negative control: unannounced post-map parent cannot promise zero first frame",
+      "evidence": {
+        "first": {
+          "address": "0x5575ac2c4270",
+          "mapped": true,
+          "hidden": false,
+          "visible": false,
+          "acceptsInput": true,
+          "at": [
+            646,
+            21
+          ],
+          "size": [
+            613,
+            758
+          ],
+          "workspace": {
+            "address": "1",
+            "id": 1,
+            "type": "normal",
+            "name": "1"
+          },
+          "floating": false,
+          "monitor": 0,
+          "class": "cornice-routing-synthetic",
+          "title": "route-unannounced",
+          "initialClass": "cornice-routing-synthetic",
+          "initialTitle": "route-unannounced",
+          "pid": 1183,
+          "xwayland": false,
+          "pinned": false,
+          "pinFullscreened": false,
+          "fullscreen": 0,
+          "fullscreenClient": 0,
+          "fullscreenHandler": "default",
+          "allowedOverFullscreen": true,
+          "grouped": [],
+          "tags": [],
+          "swallowing": "0x0",
+          "focusHistoryID": 0,
+          "inhibitingIdle": false,
+          "xdgTag": "",
+          "xdgDescription": "",
+          "contentType": "none",
+          "tearingHint": false,
+          "stableId": "18000008"
+        },
+        "final": {
+          "address": "0x5575ac2c4270",
+          "mapped": true,
+          "hidden": false,
+          "visible": true,
+          "acceptsInput": true,
+          "at": [
+            21,
+            406
+          ],
+          "size": [
+            613,
+            373
+          ],
+          "workspace": {
+            "address": "route-B",
+            "type": "normal",
+            "name": "route-B"
+          },
+          "floating": false,
+          "monitor": 0,
+          "class": "cornice-routing-synthetic",
+          "title": "route-unannounced",
+          "initialClass": "cornice-routing-synthetic",
+          "initialTitle": "route-unannounced",
+          "pid": 1183,
+          "xwayland": false,
+          "pinned": false,
+          "pinFullscreened": false,
+          "fullscreen": 0,
+          "fullscreenClient": 0,
+          "fullscreenHandler": "default",
+          "allowedOverFullscreen": true,
+          "grouped": [],
+          "tags": [],
+          "swallowing": "0x0",
+          "focusHistoryID": 0,
+          "inhibitingIdle": false,
+          "xdgTag": "",
+          "xdgDescription": "",
+          "contentType": "none",
+          "tearingHint": false,
+          "stableId": "18000008"
+        }
+      }
+    },
+    {
+      "description": "explicit main source stays primary while an Agent presentation is active",
+      "evidence": {
+        "address": "0x5575ac517580",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          646,
+          21
+        ],
+        "size": [
+          613,
+          758
+        ],
+        "workspace": {
+          "address": "1",
+          "id": 1,
+          "type": "normal",
+          "name": "1"
+        },
+        "floating": false,
+        "monitor": 0,
+        "class": "cornice-routing-synthetic",
+        "title": "route-primary-in-view",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-primary-in-view",
+        "pid": 1225,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "18000009"
+      }
+    },
+    {
+      "description": "primary action uses its explicit output and rejects stale/missing sources",
+      "evidence": {
+        "address": "0x5575acc3a3f0",
+        "mapped": true,
+        "hidden": false,
+        "visible": false,
+        "acceptsInput": true,
+        "at": [
+          1301,
+          21
+        ],
+        "size": [
+          1238,
+          758
+        ],
+        "workspace": {
+          "address": "2",
+          "id": 2,
+          "type": "normal",
+          "name": "2"
+        },
+        "floating": false,
+        "monitor": 1,
+        "class": "cornice-routing-synthetic",
+        "title": "route-primary-second",
+        "initialClass": "cornice-routing-synthetic",
+        "initialTitle": "route-primary-second",
+        "pid": 1268,
+        "xwayland": false,
+        "pinned": false,
+        "pinFullscreened": false,
+        "fullscreen": 0,
+        "fullscreenClient": 0,
+        "fullscreenHandler": "default",
+        "allowedOverFullscreen": true,
+        "grouped": [],
+        "tags": [],
+        "swallowing": "0x0",
+        "focusHistoryID": 0,
+        "inhibitingIdle": false,
+        "xdgTag": "",
+        "xdgDescription": "",
+        "contentType": "none",
+        "tearingHint": false,
+        "stableId": "1800000a"
+      }
+    },
+    {
+      "description": "all supported first publications name the correct explicit workspace",
+      "evidence": [
+        "openwindow>>5575ab7b95f0,1,cornice-routing-synthetic,route-human",
+        "activewindowv2>>5575ab7b95f0",
+        "openwindow>>5575ac2c4270,route-A,cornice-routing-synthetic,route-root-A",
+        "openwindow>>5575ac2948a0,route-B,cornice-routing-synthetic,route-root-B",
+        "openwindow>>5575ac297950,route-A,cornice-routing-synthetic,route-same-parent",
+        "openwindow>>5575ac31ca90,route-A,cornice-routing-synthetic,route-foreign-before",
+        "openwindow>>5575ac3281d0,route-A,cornice-routing-synthetic,route-foreign-late",
+        "openwindow>>5575ac3964e0,route-B,cornice-routing-synthetic,route-premap-activation",
+        "openwindow>>5575ac337040,route-B,gtk-chooser,route-gtk-chooser",
+        "openwindow>>5575ac2c4270,1,cornice-routing-synthetic,route-unannounced",
+        "activewindowv2>>5575ac2c4270",
+        "activewindowv2>>",
+        "movewindow>>5575ac2c4270,route-B",
+        "openwindow>>5575ac517580,1,cornice-routing-synthetic,route-primary-in-view",
+        "activewindowv2>>5575ac517580",
+        "activewindowv2>>",
+        "activewindowv2>>5575ac517580",
+        "openwindow>>5575acc3a3f0,2,cornice-routing-synthetic,route-primary-second",
+        "activewindowv2>>5575acc3a3f0"
+      ]
+    }
+  ],
+  "publications": [
+    "openwindow>>5575ab7b95f0,1,cornice-routing-synthetic,route-human",
+    "activewindowv2>>5575ab7b95f0",
+    "openwindow>>5575ac2c4270,route-A,cornice-routing-synthetic,route-root-A",
+    "openwindow>>5575ac2948a0,route-B,cornice-routing-synthetic,route-root-B",
+    "openwindow>>5575ac297950,route-A,cornice-routing-synthetic,route-same-parent",
+    "openwindow>>5575ac31ca90,route-A,cornice-routing-synthetic,route-foreign-before",
+    "openwindow>>5575ac3281d0,route-A,cornice-routing-synthetic,route-foreign-late",
+    "openwindow>>5575ac3964e0,route-B,cornice-routing-synthetic,route-premap-activation",
+    "openwindow>>5575ac337040,route-B,gtk-chooser,route-gtk-chooser",
+    "openwindow>>5575ac2c4270,1,cornice-routing-synthetic,route-unannounced",
+    "activewindowv2>>5575ac2c4270",
+    "activewindowv2>>",
+    "movewindow>>5575ac2c4270,route-B",
+    "openwindow>>5575ac517580,1,cornice-routing-synthetic,route-primary-in-view",
+    "activewindowv2>>5575ac517580",
+    "activewindowv2>>",
+    "activewindowv2>>5575ac517580",
+    "openwindow>>5575acc3a3f0,2,cornice-routing-synthetic,route-primary-second",
+    "activewindowv2>>5575acc3a3f0"
+  ]
+}
