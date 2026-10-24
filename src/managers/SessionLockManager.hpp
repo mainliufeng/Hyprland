@@ -66,6 +66,7 @@ class CSessionLockManager {
     bool                    allowsSeatInput(const CSeatDesktop* seat) const;
     bool                    clientLocked();
     bool                    outputsSecure() const;
+    bool                    allowsNewTask(uint64_t epoch);
     bool                    confirmedOff(PHLMONITOR monitor) const;
     void                    onOutputCommit(PHLMONITOR monitor, bool enabled);
     std::string             protectionStateJSON() const;

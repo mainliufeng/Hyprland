@@ -419,13 +419,21 @@ void CSessionLockProtocol::activate(CSessionLock* lock) {
 }
 
 bool CSessionLock::allowsSeatInput(const CSeatDesktop* seat) const {
-    return !m_inert && m_activated && scoped() && seat && seat->scopeExemptionAllowed() && !seat->paused() && std::ranges::any_of(m_allowedSeats, [seat](const auto& exemption) {
-        return exemption.identity == seat->socketName() && exemption.generation == seat->controlGeneration();
-    });
+    if (m_inert || !m_activated || !scoped() || !seat || seat->paused())
+        return false;
+    if (seat->lockedTaskAllowed(g_pSessionLockManager->lockEpoch()))
+        return excludesOutput(seat->monitor());
+    return seat->scopeExemptionAllowed() && std::ranges::any_of(m_allowedSeats, [seat](const auto& exemption) {
+               return exemption.identity == seat->socketName() && exemption.generation == seat->controlGeneration();
+           });
 }
 
 bool CSessionLock::excludesOutput(PHLMONITOR monitor) const {
-    return scoped() && std::ranges::any_of(m_excludedOutputs, [monitor](const auto& output) { return output.lock() == monitor; });
+    // Managed headless privacy is fixed before wl_output/global announcement.
+    // A new private task output can join a human lock without ever becoming a
+    // physical lock surface or revealing a normal frame on a protected output.
+    return scoped() &&
+        (SeatInput::registry()->isPrivateOutput(monitor) || std::ranges::any_of(m_excludedOutputs, [monitor](const auto& output) { return output.lock() == monitor; }));
 }
 
 bool CSessionLock::inert() const {

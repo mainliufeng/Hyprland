@@ -103,7 +103,15 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_pointer->setCursorBuffer(buffer, image.hotspot / m_monitor->m_scale, m_monitor->m_scale);
     }));
     m_listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] {
+        if (m_lockedTaskEpoch && m_lockedTaskEpoch != g_pSessionLockManager->lockEpoch()) {
+            setPaused(true);
+            return;
+        }
         if (g_pSessionLockManager->allowsSeatInput(this))
+            return;
+        // Preserve task-completed or freshly initialized idle state, without
+        // granting input. Full locks and every other interruption revoke it.
+        if (g_pSessionLockManager->scoped() && taskIdle() && !g_pSessionLockManager->protectsOutput(m_homeOutput.lock()))
             return;
         setPaused(true);
         m_dragController->dragEnd();
@@ -115,6 +123,8 @@ CSeatDesktop::CSeatDesktop(const std::string& name, PHLMONITOR monitor) : m_moni
         m_pointer->resetCursorImage();
     }));
     m_listeners.emplace_back(g_pSessionLockManager->m_events.unlock.listen([this] {
+        if (m_lockedTaskEpoch)
+            setPaused(true);
         if (!m_active)
             return;
         const auto& image = Pointer::mgr()->currentCursorImage();
@@ -195,8 +205,8 @@ bool CSeatDesktop::inputAllowed() const {
 }
 
 bool CSeatDesktop::viewAvailable() const {
-    return m_active && m_homeOutput && m_homeOutput->m_enabled && m_monitor && m_monitor->m_enabled &&
-        (SeatInput::registry()->isPrivateOutput(m_homeOutput.lock()) || m_monitor->m_dpmsStatus) &&
+    return (!m_lockedTaskEpoch || lockedTaskAllowed(g_pSessionLockManager->lockEpoch())) && m_active && m_homeOutput && m_homeOutput->m_enabled && m_monitor &&
+        m_monitor->m_enabled && (SeatInput::registry()->isPrivateOutput(m_homeOutput.lock()) || m_monitor->m_dpmsStatus) &&
         (!g_pSessionLockManager->isSessionLocked() || g_pSessionLockManager->allowsSeatInput(this));
 }
 
@@ -220,8 +230,13 @@ uint64_t CSeatDesktop::controlGeneration() const {
     return m_controlGeneration;
 }
 
-void CSeatDesktop::setPaused(bool paused, bool composedKeyboard) {
-    m_managedControl = true;
+void CSeatDesktop::setPaused(bool paused, bool composedKeyboard, bool taskBoundary) {
+    if (!taskBoundary) {
+        m_taskOutput.reset();
+    }
+    m_taskIdle        = false;
+    m_lockedTaskEpoch = 0;
+    m_managedControl  = true;
     // Every transition revokes existing virtual devices, including devices
     // that remained connected across pause/resume or a session lock.
     m_dragController->dragEnd();
@@ -765,6 +780,8 @@ void CSeatDesktop::listenWorkspaceMonitorChanges() {
             return;
         const auto local = m_pointer->position() - (previous ? previous->m_position : Vector2D{});
         m_monitor        = current;
+        if (m_lockedTaskEpoch != 0 && current != m_taskOutput)
+            setPaused(true);
         ++m_viewEpoch;
         m_pointer->bindMonitor(current);
         m_pointer->warpTo(current->m_position + local);
@@ -778,7 +795,7 @@ void CSeatDesktop::listenWorkspaceMonitorChanges() {
 }
 
 std::string CSeatDesktop::reserveWorkspace(const std::string& name) {
-    if (!active() || g_pSessionLockManager->isSessionLocked())
+    if (!active() || (g_pSessionLockManager->isSessionLocked() && !lockedTaskAllowed(g_pSessionLockManager->lockEpoch())))
         return "workspace management unavailable";
     if (State::workspaceState()->query().input(name).run())
         return "ok";
@@ -791,8 +808,8 @@ std::string CSeatDesktop::reserveWorkspace(const std::string& name) {
     return "ok";
 }
 
-std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly) {
-    if (!inputAllowed() && (!viewOnly || !active() || g_pSessionLockManager->isSessionLocked()))
+std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly, bool initializing) {
+    if (!initializing && !inputAllowed() && (!viewOnly || !active() || g_pSessionLockManager->isSessionLocked()))
         return "seat is unavailable or session is locked";
     auto current = State::workspaceState()->query().input(name).run();
     if (!current) {
@@ -807,6 +824,10 @@ std::string CSeatDesktop::switchWorkspace(const std::string& name, bool viewOnly
     }
     if (!current || !current->m_monitor.lock() || !current->m_monitor.lock()->m_enabled)
         return "workspace has no enabled output";
+    if ((initializing && current->m_monitor != m_homeOutput) || (m_lockedTaskEpoch != 0 && current->m_monitor != m_taskOutput)) {
+        setPaused(true);
+        return "locked task cannot switch output; control revoked";
+    }
     m_dragController->dragEnd();
     PROTO::data->abortDndIfPresent(m_manager.get());
     m_manager->setGrab(nullptr);
@@ -881,7 +902,7 @@ CSeatDesktopRegistry::CSeatDesktopRegistry() {
     SeatInput::presentation() = makeUnique<CSeatPresentation>();
     m_sharedPrimarySeat       = makeUnique<CSharedPrimarySeat>();
     m_privateOutputAdded      = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR monitor) {
-        if (m_pendingPrivateOutputs.erase(monitor->m_name))
+        if (isPrivateOutput(monitor) && m_pendingPrivateOutputs.erase(monitor->m_name))
             m_privateOutputs.emplace_back(monitor);
     });
     m_frameTimer              = makeShared<CEventLoopTimer>(
@@ -921,9 +942,10 @@ bool CSeatDesktopRegistry::focusesWindow(PHLWINDOW window) const {
     return window && std::ranges::any_of(m_seats, [&](const auto& seat) { return seat->active() && seat->window() == window; });
 }
 
-std::string CSeatDesktopRegistry::create(const std::string& name, PHLMONITOR monitor) {
-    if (g_pSessionLockManager->isSessionLocked())
-        return "cannot create seats while locked";
+std::string CSeatDesktopRegistry::create(const std::string& name, PHLMONITOR monitor, const std::string& lockEpoch) {
+    if ((!lockEpoch.empty() && (!g_pSessionLockManager->allowsNewTask(g_pSessionLockManager->lockEpoch()) || lockEpoch != std::to_string(g_pSessionLockManager->lockEpoch()))) ||
+        (g_pSessionLockManager->isSessionLocked() && (lockEpoch.empty() || !isPrivateOutput(monitor))))
+        return "seat creation requires a stable human lock and private output";
     collectRetired();
     if (name.empty() || name == "main" || name == HL_SEAT_NAME || name.size() > 64 ||
         name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") != std::string::npos)
@@ -1054,6 +1076,47 @@ bool CSeatDesktop::allowsInputSource(wl_client* client) {
     return m_active && identity && (!m_managedControl || (!m_paused && identity > m_revokedThrough));
 }
 
+bool CSeatDesktop::taskIdle() const {
+    return m_taskIdle && m_paused && m_active && m_homeOutput && m_homeOutput == m_monitor && m_homeOutput->m_enabled &&
+        SeatInput::registry()->isPrivateOutput(m_homeOutput.lock());
+}
+
+bool CSeatDesktop::initializeTask(const std::string& workspace, uint64_t epoch) {
+    if (m_managedControl || m_controlGeneration != 1 || !m_active || !m_homeOutput || !SeatInput::registry()->isPrivateOutput(m_homeOutput.lock()) ||
+        epoch != g_pSessionLockManager->lockEpoch() || (g_pSessionLockManager->isSessionLocked() && !g_pSessionLockManager->allowsNewTask(epoch)))
+        return false;
+    if (switchWorkspace(workspace, false, true) != "ok")
+        return false;
+    setPaused(true, false, true);
+    m_taskIdle = true;
+    return true;
+}
+
+bool CSeatDesktop::lockedTaskAllowed(uint64_t epoch) const {
+    return !m_paused && m_lockedTaskEpoch != 0 && m_lockedTaskEpoch == epoch && g_pSessionLockManager->allowsNewTask(epoch) && m_active && m_taskOutput &&
+        m_taskOutput == m_homeOutput && m_taskOutput == m_monitor && m_taskOutput->m_enabled && SeatInput::registry()->isPrivateOutput(m_taskOutput.lock());
+}
+
+bool CSeatDesktop::startLockedTask(uint64_t epoch, const std::string& captureGrant) {
+    if (!taskIdle() || !g_pSessionLockManager->allowsNewTask(epoch) || g_pSessionLockManager->protectsOutput(m_homeOutput.lock()))
+        return false;
+    setPaused(false, true, true);
+    m_taskOutput      = m_homeOutput;
+    m_lockedTaskEpoch = epoch;
+    m_captureGrant    = captureGrant;
+    restoreKeyboardFocus();
+    return true;
+}
+
+void CSeatDesktop::finishTaskIdle() {
+    if (!inputAllowed()) {
+        setPaused(true);
+        return;
+    }
+    setPaused(true, false, true);
+    m_taskIdle = true;
+}
+
 bool CSeatDesktop::scopeExemptionAllowed() const {
     return m_scopeExemptionAllowed;
 }
@@ -1061,7 +1124,8 @@ void CSeatDesktop::setScopeExemptionAllowed(bool allow) {
     m_scopeExemptionAllowed = allow;
 }
 bool CSeatDesktopRegistry::isPrivateOutput(PHLMONITOR monitor) const {
-    return monitor && (m_pendingPrivateOutputs.contains(monitor->m_name) || std::ranges::any_of(m_privateOutputs, [&](const auto& ref) { return ref == monitor; }));
+    return monitor && monitor->m_createdByUser && monitor->m_output && monitor->m_output->getBackend()->type() == Aquamarine::AQ_BACKEND_HEADLESS &&
+        (m_pendingPrivateOutputs.contains(monitor->m_name) || std::ranges::any_of(m_privateOutputs, [&](const auto& ref) { return ref == monitor; }));
 }
 std::string CSeatDesktopRegistry::registerPrivateOutput(PHLMONITOR monitor) {
     if (g_pSessionLockManager->isSessionLocked())
@@ -1082,9 +1146,10 @@ bool CSeatDesktop::captureGranted(const std::string& grant) const {
     return !grant.empty() && grant == m_captureGrant;
 }
 
-std::string CSeatDesktopRegistry::createPrivateOutput(const std::string& name) {
-    if (g_pSessionLockManager->isSessionLocked())
-        return "cannot create outputs while locked";
+std::string CSeatDesktopRegistry::createPrivateOutput(const std::string& name, const std::string& lockEpoch) {
+    if ((!lockEpoch.empty() && (!g_pSessionLockManager->allowsNewTask(g_pSessionLockManager->lockEpoch()) || lockEpoch != std::to_string(g_pSessionLockManager->lockEpoch()))) ||
+        (g_pSessionLockManager->isSessionLocked() && lockEpoch.empty()))
+        return "private output creation requires a stable human lock";
     if (name.empty() || name.size() > 96 || name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") != std::string::npos)
         return "invalid private output name";
     if (m_pendingPrivateOutputs.contains(name) || State::monitorState()->query().name(name).run())

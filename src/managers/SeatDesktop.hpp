@@ -77,7 +77,12 @@ class CSeatDesktop {
     uint64_t                                     viewEpoch() const;
     uint64_t                                     focusEpoch() const;
     std::string                                  inputFocusToken() const;
-    void                                         setPaused(bool paused, bool composedKeyboard = false);
+    void                                         setPaused(bool paused, bool composedKeyboard = false, bool taskBoundary = false);
+    bool                                         taskIdle() const;
+    bool                                         initializeTask(const std::string& workspace, uint64_t epoch);
+    bool                                         lockedTaskAllowed(uint64_t epoch) const;
+    bool                                         startLockedTask(uint64_t epoch, const std::string& captureGrant);
+    void                                         finishTaskIdle();
     void                                         retire();
     const std::string&                           socketName() const;
     bool                                         ownsClient(const wl_client* client) const;
@@ -95,7 +100,7 @@ class CSeatDesktop {
     void                                         refocus(uint32_t timeMs = 0, bool keyboard = false);
     void                                         restoreKeyboardFocus();
     std::string                                  reserveWorkspace(const std::string& name);
-    std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false);
+    std::string                                  switchWorkspace(const std::string& name, bool viewOnly = false, bool initializing = false);
     std::vector<uint32_t>                        pressedKeys() const;
     const std::vector<SP<IKeyboard>>&            keyboards() const;
 
@@ -142,6 +147,9 @@ class CSeatDesktop {
     UP<CWaylandSocket>                                          m_socket;
     std::string                                                 m_socketName;
     std::string                                                 m_captureGrant;
+    PHLMONITORREF                                               m_taskOutput;
+    bool                                                        m_taskIdle        = false;
+    uint64_t                                                    m_lockedTaskEpoch = 0;
     std::vector<SP<IKeyboard>>                                  m_keyboards;
     std::vector<SP<IPointer>>                                   m_pointers;
     std::vector<uint32_t>                                       m_buttons;
@@ -165,7 +173,7 @@ class CSeatDesktopRegistry {
     bool     primaryCaptureGranted(const std::string& grant) const;
     CSeatDesktopRegistry();
     ~CSeatDesktopRegistry();
-    std::string                          create(const std::string& name, PHLMONITOR monitor);
+    std::string                          create(const std::string& name, PHLMONITOR monitor, const std::string& lockEpoch = {});
     std::string                          remove(const std::string& name);
     CSeatDesktop*                        forName(const std::string& name) const;
     CSeatDesktop*                        forManager(CSeatManager* manager) const;
@@ -178,7 +186,7 @@ class CSeatDesktopRegistry {
     void                                 refreshWorkspace(PHLWORKSPACE workspace);
     bool                                 isPrivateOutput(PHLMONITOR monitor) const;
     std::string                          registerPrivateOutput(PHLMONITOR monitor);
-    std::string                          createPrivateOutput(const std::string& name);
+    std::string                          createPrivateOutput(const std::string& name, const std::string& lockEpoch = {});
     bool                                 isSeatGlobal(const wl_global* global) const;
     bool                                 usesWorkspace(PHLWORKSPACE workspace) const;
     bool                                 focusesWindow(PHLWINDOW window) const;

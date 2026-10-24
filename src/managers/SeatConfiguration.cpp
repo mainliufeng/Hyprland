@@ -68,13 +68,17 @@ bool CConfiguration::overlay(const SP<Desktop::View::CLayerSurface>& layer, cons
 }
 
 std::string CConfiguration::configure(const std::string& json) {
-    if (json.size() > 65536 || g_pSessionLockManager->isSessionLocked())
+    if (json.size() > 65536)
         return "configuration unavailable";
     SConfiguration config;
     if (const auto error = glz::read_json(config, json); error)
         return "invalid configuration JSON";
     auto       seat    = SeatInput::registry()->forName(config.seatName);
     const bool primary = config.seatName == "main" && config.seatId == g_pCompositor->m_instanceSignature + "-primary";
+    if (g_pSessionLockManager->isSessionLocked() &&
+        (primary || !seat || !seat->lockedTaskAllowed(g_pSessionLockManager->lockEpoch()) ||
+         std::ranges::any_of(m_controllers, [&](const auto& entry) { return entry.second.config.seatId == config.seatId; })))
+        return "locked reconfiguration unavailable";
     if (primary && !config.bindings.empty())
         return "primary overlay configuration cannot replace physical bindings";
     if ((!primary && (!seat || seat->socketName() != config.seatId)) || config.owner.size() < 32 || config.owner.size() > 128 || config.bindings.size() > 128 ||
@@ -206,7 +210,7 @@ std::string CConfiguration::configure(const std::string& json) {
 
 std::string CConfiguration::ensureWorkspace(const std::string& name, const std::string& identity, const std::string& workspace) {
     const auto seat = SeatInput::registry()->forName(name);
-    if (!seat || seat->socketName() != identity || g_pSessionLockManager->isSessionLocked())
+    if (!seat || seat->socketName() != identity || (g_pSessionLockManager->isSessionLocked() && !seat->lockedTaskAllowed(g_pSessionLockManager->lockEpoch())))
         return "workspace management unavailable";
     return seat->reserveWorkspace(workspace);
 }

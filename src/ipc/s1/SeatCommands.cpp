@@ -52,16 +52,16 @@ static std::string seatState(CSeatDesktop* seat, PHLWORKSPACE view = nullptr) {
     if (!output || !view)
         return "seat view is unavailable";
     const auto cursor = seat->pointer()->position();
-    return std::format("{{\"name\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\",\"paused\":{},\"available\":{},"
+    return std::format("{{\"taskIdle\":{},\"lockedTaskActive\":{},\"name\":\"{}\",\"seatId\":\"{}\",\"generation\":\"{}\",\"paused\":{},\"available\":{},"
                        "\"scopePolicy\":\"{}\",\"locked\":{},\"lockScope\":\"{}\",\"lockEpoch\":\"{}\",\"viewEpoch\":\"{}\","
                        "\"output\":\"{}\",\"display\":\"{}\",\"workspace\":\"{}\",\"viewWorkspace\":\"{}\","
                        "\"windowId\":\"{}\",\"window\":\"{}\",\"windowAddress\":\"0x{:x}\",\"cursor\":[{},{}],\"cursorVisible\":{},"
                        "\"position\":[{},{}],\"logicalSize\":[{},{}],\"pixelSize\":[{},{}],\"scale\":{},\"transform\":{}}}",
-                       escapeJSONStrings(seat->protocol()->seatName()), escapeJSONStrings(seat->socketName()), seat->controlGeneration(), seat->paused(), seat->viewAvailable(),
-                       seat->scopeExemptionAllowed() ? "allow" : "block", g_pSessionLockManager->isSessionLocked(),
-                       g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->scoped() ? "scoped" : "session") : "none", g_pSessionLockManager->lockEpoch(),
-                       seat->viewEpoch(), escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()), escapeJSONStrings(seat->workspace()->addressableName()),
-                       escapeJSONStrings(view->addressableName()), SeatInput::registry()->windowIdentity(seat->window()),
+                       seat->taskIdle(), seat->lockedTaskAllowed(g_pSessionLockManager->lockEpoch()), escapeJSONStrings(seat->protocol()->seatName()),
+                       escapeJSONStrings(seat->socketName()), seat->controlGeneration(), seat->paused(), seat->viewAvailable(), seat->scopeExemptionAllowed() ? "allow" : "block",
+                       g_pSessionLockManager->isSessionLocked(), g_pSessionLockManager->isSessionLocked() ? (g_pSessionLockManager->scoped() ? "scoped" : "session") : "none",
+                       g_pSessionLockManager->lockEpoch(), seat->viewEpoch(), escapeJSONStrings(output->m_name), escapeJSONStrings(seat->socketName()),
+                       escapeJSONStrings(seat->workspace()->addressableName()), escapeJSONStrings(view->addressableName()), SeatInput::registry()->windowIdentity(seat->window()),
                        seat->window() ? escapeJSONStrings(seat->window()->metadata().title()) : "", rc<uintptr_t>(seat->window().get()), cursor.x, cursor.y,
                        view == seat->workspace(), output->m_position.x, output->m_position.y, output->m_size.x, output->m_size.y, output->m_transformedSize.x,
                        output->m_transformedSize.y, output->m_scale, sc<int>(output->m_transform));
@@ -403,7 +403,7 @@ std::string IPC::Socket1::seatRequest(eOutputFormat format, std::string request)
         } catch (const std::exception& error) { return std::format("management display creation failed: {}", error.what()); }
     }
     if (args.size() == 2 && args[1] == "capabilities")
-        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","management-display-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","physical-input-target-v2","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1","owned-seat-action-context-v1","authorized-seat-snapshot-v1","desktop-action-routing-v1"]})";
+        return R"({"protocol":1,"dialect":"lua","features":["seat-input","seat-identity","atomic-snapshot","readonly-workspace","argb-frame","input-pause","lock-scope-v1","private-output-v1","management-display-v1","lock-aware-seat-input","lock-aware-export-v1","session-guard-v1","composed-seat-input","seat-shell-v1","native-seat-presentation-v1","physical-input-target-v1","physical-input-target-v2","primary-desktop-v1","managed-seat-config-v1","seat-action-context-v1","owned-seat-action-context-v1","authorized-seat-snapshot-v1","desktop-action-routing-v1","locked-task-start-v1"]})";
     if (args.size() == 7 && args[1] == "present")
         return SeatInput::presentation()->show(args[2], args[3], State::monitorState()->query().name(args[4]).run(), args[5], args[6]);
     if (args.size() == 3 && args[1] == "presentation")
@@ -424,8 +424,8 @@ std::string IPC::Socket1::seatRequest(eOutputFormat format, std::string request)
     }
     if (args.size() == 2 && args[1] == "lock-state")
         return g_pSessionLockManager->protectionStateJSON();
-    if (args.size() == 3 && args[1] == "create-private-output")
-        return SeatInput::registry()->createPrivateOutput(args[2]);
+    if ((args.size() == 3 || args.size() == 4) && args[1] == "create-private-output")
+        return SeatInput::registry()->createPrivateOutput(args[2], args.size() == 4 ? args[3] : "");
     if (args.size() == 3 && args[1] == "private-output")
         return SeatInput::registry()->registerPrivateOutput(State::monitorState()->query().name(args[2]).run());
     if (args.size() == 2 && args[1] == "private-outputs") {
@@ -458,6 +458,26 @@ std::string IPC::Socket1::seatRequest(eOutputFormat format, std::string request)
                 return "invalid export grant";
             seat->setCaptureGrant(args[5]);
         }
+        return seatState(seat);
+    }
+    if (args.size() >= 3 && (args[1] == "task-initialize" || args[1] == "locked-task-start" || args[1] == "task-idle")) {
+        const auto seat = SeatInput::registry()->forName(args[2]);
+        if (args.size() < 5 || !seat || seat->socketName() != args[3] || std::to_string(seat->controlGeneration()) != args[4])
+            return "stale seat identity or control generation";
+        if ((args[1] == "locked-task-start" || args[1] == "task-initialize") && args.size() == 7) {
+            uint64_t   epoch  = 0;
+            const auto parsed = std::from_chars(args[5].data(), args[5].data() + args[5].size(), epoch);
+            if (parsed.ec != std::errc{} || parsed.ptr != args[5].data() + args[5].size())
+                return "invalid task lock epoch";
+            if (args[1] == "task-initialize") {
+                if (!seat->initializeTask(args[6], epoch))
+                    return "fresh private task initialization unavailable or stale";
+            } else if (args[6].size() < 32 || args[6].size() > 128 || !seat->startLockedTask(epoch, args[6]))
+                return "locked task allocation unavailable or stale";
+        } else if (args[1] == "task-idle" && args.size() == 5)
+            seat->finishTaskIdle();
+        else
+            return "invalid task command";
         return seatState(seat);
     }
     if (args.size() >= 6 && (args[1] == "control" || args[1] == "act")) {
@@ -544,8 +564,8 @@ std::string IPC::Socket1::seatRequest(eOutputFormat format, std::string request)
         }
         return format == FORMAT_JSON ? result + "]" : result;
     }
-    if (args[1] == "create" && args.size() == 4)
-        return SeatInput::registry()->create(args[2], State::monitorState()->query().name(args[3]).run());
+    if (args[1] == "create" && (args.size() == 4 || args.size() == 5))
+        return SeatInput::registry()->create(args[2], State::monitorState()->query().name(args[3]).run(), args.size() == 5 ? args[4] : "");
     if (args[1] == "remove" && args.size() == 3)
         return SeatInput::registry()->remove(args[2]);
     if (args.size() == 4 && (args[1] == "workspace" || args[1] == "view-workspace")) {

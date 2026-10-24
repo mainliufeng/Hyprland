@@ -383,6 +383,10 @@ void CSessionLockManager::onOutputCommit(PHLMONITOR monitor, bool enabled) {
     if (!enabled && isSessionLocked())
         onLockscreenPresented(monitor->m_id, m_lockEpoch);
 }
+bool CSessionLockManager::allowsNewTask(uint64_t epoch) {
+    return isSessionLocked() && scoped() && hasOwner() && outputsSecure() && epoch == lockEpoch();
+}
+
 bool CSessionLockManager::outputsSecure() const {
     if (!PROTO::sessionLock->isLocked())
         return false;

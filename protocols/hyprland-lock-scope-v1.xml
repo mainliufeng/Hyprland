@@ -5,9 +5,12 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
   <description summary="explicitly scoped compositor lock">
     Experimental compositor-specific protocol. A new scope protects every seat
     and output by default. Before activate, a trusted management client may allow
-    preauthorized secondary seats and exclude managed private headless outputs.
+    continuing secondary seats and exclude managed private headless outputs.
+    With the locked-task-start-v1 management capability, fresh Agent task leases
+    can also be issued during stable human protection. Managed private headless
+    outputs created under that capability are excluded before announcement.
     Seat identity and control generation are checked on activation and on input.
-    Unknown seats and newly connected outputs remain protected. Secure follows
+    Unknown seats and newly connected physical/unknown outputs remain protected. Secure follows
     presentation of protected lock frames or confirmation that outputs are off.
     This is not a full ext-session-lock. Scope owner or guard loss escalates to
     an orphaned full lock and never unlocks. Ordinary ext-session-lock is unchanged.
